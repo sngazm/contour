@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, rrim } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, rrim } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -206,8 +206,6 @@ export function start(canvas) {
       zipCharges: 0,        // ジップラインの残り使用回数(取得ごとに+1)
       pickups: spawnItems(CFG.FIELD_R),
       riding: null,         // ジップライン移動中の目標 {tx,ty}
-      curSpeed: 0,          // 現在の速度係数(描画の線長に使用)
-      moveDir: { x: 0, y: 0 },
       path: [{ x: 0, y: 0, h: terrain.height(0, 0) }],
       readyPulse: 0,
       end: null,
@@ -291,16 +289,13 @@ export function start(canvas) {
     if (g.state === 'play') {
       g.time += dt;
       let moved = false;
-      g.curSpeed = 0;
       if (g.riding) {
         // ジップライン：等速で目標へ（地形を無視）
         const dx = g.riding.tx - g.px, dy = g.riding.ty - g.py;
         const d = Math.hypot(dx, dy);
         const step = CFG.ZIP_SPEED * dt;
-        if (d > 0) { g.moveDir.x = dx / d; g.moveDir.y = dy / d; }
         if (d <= CFG.ZIP_ARRIVE || d <= step) { g.px = g.riding.tx; g.py = g.riding.ty; g.riding = null; }
         else { g.px += (dx / d) * step; g.py += (dy / d) * step; }
-        g.curSpeed = CFG.ZIP_SPEED / CFG.BASE_SPEED; // 速い＝最長
         moved = true;
       } else {
         const mv = input.read();
@@ -314,8 +309,6 @@ export function start(canvas) {
           const sp = CFG.BASE_SPEED * f * mv.mag * dt;
           g.px += mv.x * sp;
           g.py += mv.y * sp;
-          g.moveDir.x = mv.x; g.moveDir.y = mv.y;
-          g.curSpeed = f * mv.mag; // 実際の速度係数
           moved = true;
         }
       }
@@ -696,15 +689,12 @@ export function start(canvas) {
     ctx.beginPath();
     ctx.arc(cx, cy, 13 * pulse, 0, TAU);
     ctx.stroke();
-    if (g.curSpeed > 0.001) {
-      // 進行方向の線。長さ＝実速度（急登でゆっくり=短い／下りで加速=長い）
-      const len = lerp(10, 44, clamp(g.curSpeed / CFG.SPEED_MAX, 0, 1));
+    if (mv.mag > 0) {
       ctx.strokeStyle = '#26251f';
       ctx.lineWidth = 2.5;
-      ctx.lineCap = 'round';
       ctx.beginPath();
       ctx.moveTo(cx, cy);
-      ctx.lineTo(cx + g.moveDir.x * (7 + len), cy + g.moveDir.y * (7 + len));
+      ctx.lineTo(cx + mv.x * 22, cy + mv.y * 22);
       ctx.stroke();
     }
 
