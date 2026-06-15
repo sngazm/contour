@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, rrim } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, hypso } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -29,28 +29,6 @@ const CFG = {
 };
 
 const ITEM_TYPES = ['glove', 'goggle', 'zip'];
-const RV_BLUR = 5; // 尾根谷度の近傍半径(セル数)
-
-// セパラブルなボックスぼかし（src→dst、tmp は作業用）
-function boxBlur(src, nx, ny, rb, tmp, dst) {
-  const w = 2 * rb + 1;
-  for (let j = 0; j < ny; j++) {
-    let sum = 0;
-    for (let i = -rb; i <= rb; i++) sum += src[j * nx + clamp(i, 0, nx - 1)];
-    for (let i = 0; i < nx; i++) {
-      tmp[j * nx + i] = sum / w;
-      sum += src[j * nx + clamp(i + rb + 1, 0, nx - 1)] - src[j * nx + clamp(i - rb, 0, nx - 1)];
-    }
-  }
-  for (let i = 0; i < nx; i++) {
-    let sum = 0;
-    for (let j = -rb; j <= rb; j++) sum += tmp[clamp(j, 0, ny - 1) * nx + i];
-    for (let j = 0; j < ny; j++) {
-      dst[j * nx + i] = sum / w;
-      sum += tmp[clamp(j + rb + 1, 0, ny - 1) * nx + i] - tmp[clamp(j - rb, 0, ny - 1) * nx + i];
-    }
-  }
-}
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
@@ -163,11 +141,8 @@ export function start(canvas) {
 
   const input = createInput(canvas);
   const grid = new Float32Array(96 * 96); // ワールド固定格子の作業領域
-  const gridB = new Float32Array(96 * 96); // ぼかし
-  const gridT = new Float32Array(96 * 96); // ぼかし作業用
-  const gridRV = new Float32Array(96 * 96); // 尾根谷度
   const grad = { x: 0, y: 0 };
-  const shadeCanvas = document.createElement('canvas'); // 段彩/立体図用オフスクリーン
+  const shadeCanvas = document.createElement('canvas'); // 陰影描画用オフスクリーン
   const shadeCtx = shadeCanvas.getContext('2d');
 
   let game;
@@ -452,43 +427,35 @@ export function start(canvas) {
     const sxOf = (gx) => cx + (ox0 + gx * CELL - g.px) * ppu;
     const syOf = (gy) => cy + (oy0 + gy * CELL - g.py) * ppu;
 
-    // 赤色立体図ふう：尾根谷度(局所相対起伏)を明度で塗る。傾斜は等高線が担う。
+    // 段彩（標高で塗り分けるベタ塗り。青→緑→茶→白。等高線の境界に一致）
     const drawTint = () => {
-      // 尾根谷度 = 高さ − 近傍平均（尾根で＋、谷で−）
-      boxBlur(grid, nx, ny, RV_BLUR, gridT, gridB);
-      let maxAbs = 1e-4;
-      for (let k = 0; k < nx * ny; k++) {
-        const rv = grid[k] - gridB[k];
-        gridRV[k] = rv;
-        const a = rv < 0 ? -rv : rv;
-        if (a > maxAbs) maxAbs = a;
-      }
-      const scale = 0.5 / Math.max(maxAbs, 0.02); // 0付近(平地)は中明度に
-      const NL = 64;
-      const lut = new Uint8Array(NL * 3);
-      for (let b = 0; b < NL; b++) {
-        const c = rrim(b / (NL - 1));
-        lut[b * 3] = c[0]; lut[b * 3 + 1] = c[1]; lut[b * 3 + 2] = c[2];
-      }
       const M = clamp(Math.round(2 * R), 96, 340);
       shadeCanvas.width = M; shadeCanvas.height = M;
       const img = shadeCtx.createImageData(M, M);
       const d = img.data;
+      const step = CFG.CONTOUR_STEP;
+      const nb = Math.ceil(1 / step) + 1;          // バンド→色のLUT（毎ピクセルのhypso回避）
+      const lut = new Uint8Array(nb * 3);
+      for (let b = 0; b < nb; b++) {
+        const c = hypso((b + 0.5) * step);
+        lut[b * 3] = c[0]; lut[b * 3 + 1] = c[1]; lut[b * 3 + 2] = c[2];
+      }
       for (let v = 0; v < M; v++) {
         const gyf = (v / (M - 1)) * (ny - 1);
         const j = gyf | 0, fj = gyf - j, j2 = Math.min(ny - 1, j + 1);
         for (let u = 0; u < M; u++) {
           const gxf = (u / (M - 1)) * (nx - 1);
           const i = gxf | 0, fi = gxf - i, i2 = Math.min(nx - 1, i + 1);
-          const rv = (gridRV[j * nx + i] * (1 - fi) + gridRV[j * nx + i2] * fi) * (1 - fj)
-                   + (gridRV[j2 * nx + i] * (1 - fi) + gridRV[j2 * nx + i2] * fi) * fj;
-          let b = (clamp(0.5 + rv * scale, 0, 1) * (NL - 1)) | 0;
+          const h = (grid[j * nx + i] * (1 - fi) + grid[j * nx + i2] * fi) * (1 - fj)
+                  + (grid[j2 * nx + i] * (1 - fi) + grid[j2 * nx + i2] * fi) * fj;
+          let b = (h / step) | 0;
+          if (b < 0) b = 0; else if (b >= nb) b = nb - 1;
           const idx = (v * M + u) * 4, lb = b * 3;
           d[idx] = lut[lb]; d[idx + 1] = lut[lb + 1]; d[idx + 2] = lut[lb + 2]; d[idx + 3] = 255;
         }
       }
       shadeCtx.putImageData(img, 0, 0);
-      ctx.imageSmoothingEnabled = true; // 立体図は連続的に
+      ctx.imageSmoothingEnabled = false; // ベタ塗り（境界くっきり）
       ctx.drawImage(shadeCanvas, sxOf(0), syOf(0), (nx - 1) * CELL * ppu, (ny - 1) * CELL * ppu);
     };
 
