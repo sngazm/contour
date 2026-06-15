@@ -1,53 +1,79 @@
-// 平面波の和で作る連続地形。高さも勾配も解析的に求まるので、
-// 坂の傾き（移動コスト）を正確に出せるのが利点。
-// 仕上げに指数シェイピングをかけ、平地を広く・高所を稀で険しくする。
+// バリューノイズの多重合成(fBm)で作る連続地形。
+// 各オクターブで座標を回転させ、格子・方向の偏り（縦横のひしゃげ）を消す。
+// 高さも勾配も解析的に求まるので、坂の傾き（移動コスト）を正確に出せる。
 import { makeRng, TAU, clamp } from './util.js';
 
 // 標高の縦方向スケール（ワールド単位）。斜め俯瞰の高さ表現に使う。
-// 移動コストは勾配から直接計算するため、この値には依存しない。
 export const HEIGHT_SCALE = 900;
 
 // シェイピング指数（大きいほど高所が稀＆険しく、平地が広くなる）
 const SHAPE = 2.5;
 
+const fade = (t) => t * t * t * (t * (t * 6 - 15) + 10);
+const dfade = (t) => 30 * t * t * (t * (t - 2) + 1);
+
+// 整数格子のハッシュ → [-1,1)
+function vhash(ix, iy, seed) {
+  let h = (Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(seed, 0x9e3779b1)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h ^= h >>> 16;
+  return (h >>> 0) / 2147483648 - 1;
+}
+
 export function makeTerrain(seed) {
   const rng = makeRng(seed);
+  const octaves = 6;
+  const lacunarity = 2.0;
+  const gain = 0.5;
   const waves = [];
-  const octaves = 7;
+  let freq = 1 / 620; // 最大スケール（ゆるい大起伏）
   let amp = 1;
   let total = 0;
-  // 大きくゆるやかな起伏 → 細かいディテール、の順に重ねる。
-  // 基本周波数を低めにして「峰の数」を減らす。
-  for (let i = 0; i < octaves; i++) {
-    const freq = 0.0026 * Math.pow(1.9, i);
-    const ang = rng() * TAU;
+  for (let o = 0; o < octaves; o++) {
+    const ang = rng() * TAU; // オクターブごとに座標を回転
     waves.push({
-      kx: Math.cos(ang) * freq,
-      ky: Math.sin(ang) * freq,
+      freq,
       amp,
-      phase: rng() * TAU,
+      cos: Math.cos(ang),
+      sin: Math.sin(ang),
+      seed: (seed + o * 1013904223) | 0,
     });
     total += amp;
-    amp *= 0.62;
+    freq *= lacunarity;
+    amp *= gain;
   }
-  const norm = 1 / total; // 生の高さを約 -1..1 に収める
+  const norm = 1 / total; // 生地形を約 -1..1 に収める
 
-  // 生地形と勾配をまとめて評価
+  // 生地形と勾配をまとめて評価（out に raw 値と d/dx, d/dy）
   function evalRaw(x, y, out) {
-    let h = 0;
-    let gx = 0;
-    let gy = 0;
-    for (let i = 0; i < waves.length; i++) {
-      const w = waves[i];
-      const p = w.kx * x + w.ky * y + w.phase;
-      h += w.amp * Math.sin(p);
-      const c = Math.cos(p) * w.amp;
-      gx += w.kx * c;
-      gy += w.ky * c;
+    let val = 0, dx = 0, dy = 0;
+    for (let o = 0; o < waves.length; o++) {
+      const w = waves[o];
+      // 回転 → スケール
+      const xr = x * w.cos - y * w.sin;
+      const yr = x * w.sin + y * w.cos;
+      const X = xr * w.freq, Y = yr * w.freq;
+      const ix = Math.floor(X), iy = Math.floor(Y);
+      const fx = X - ix, fy = Y - iy;
+      const a = vhash(ix, iy, w.seed);
+      const b = vhash(ix + 1, iy, w.seed);
+      const c = vhash(ix, iy + 1, w.seed);
+      const d = vhash(ix + 1, iy + 1, w.seed);
+      const u = fade(fx), v = fade(fy);
+      const i1 = a + u * (b - a);
+      const i2 = c + u * (d - c);
+      val += w.amp * (i1 + v * (i2 - i1));
+      // ノイズの勾配（X,Y 空間）
+      const gX = dfade(fx) * ((b - a) * (1 - v) + (d - c) * v);
+      const gY = dfade(fy) * (i2 - i1);
+      // X,Y → 回転前(xr,yr) は ×freq、さらに回転を戻して x,y へ
+      const gxr = gX * w.freq, gyr = gY * w.freq;
+      dx += w.amp * (gxr * w.cos + gyr * w.sin);
+      dy += w.amp * (-gxr * w.sin + gyr * w.cos);
     }
-    out.h = h * norm;
-    out.gx = gx * norm;
-    out.gy = gy * norm;
+    out.h = val * norm;
+    out.gx = dx * norm;
+    out.gy = dy * norm;
   }
 
   const tmp = { h: 0, gx: 0, gy: 0 };

@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, hypso } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, hypso } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -14,7 +14,7 @@ const CFG = {
   VIEWSHED_RAYS: 96,      // 視線遮蔽を測る方角の数
   VIEWSHED_STEPS: 64,     // 1方角あたりの探索ステップ数
   BASE_SPEED: 100,        // 平地の移動速度(ワールド単位/秒)
-  UPHILL_K: 400,          // 斜面が速度に効く強さ
+  UPHILL_K: 300,          // 斜面が速度に効く強さ
   SPEED_MIN: 0.16,        // 急登での下限係数
   SPEED_MAX: 1.7,         // 下りでの上限係数
   PATH_MIN_STEP: 5,       // 軌跡を記録する最小移動距離
