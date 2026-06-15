@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, hypso } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -31,14 +31,8 @@ const CFG = {
 
 const ITEM_TYPES = ['glove', 'goggle', 'zip'];
 const RV_BLUR = 12; // 尾根谷度の近傍半径(セル数。広いほどマダラが減る)
-// 尾根谷度を5段階に。谷(暗)→尾根(明)。spは線間隔(px)、crossでクロスハッチ。
-const HATCH = [
-  { sp: 3.8, cross: true },   // 0 谷=最も暗い
-  { sp: 6.0, cross: true },   // 1
-  { sp: 5.5, cross: false },  // 2
-  { sp: 9.0, cross: false },  // 3
-  { sp: 0, cross: false },    // 4 尾根=白(ハッチ無し)
-];
+const SHADE_LO = 0.6;  // 谷の暗さ係数
+const SHADE_HI = 1.22; // 尾根の明るさ係数
 
 // セパラブルなボックスぼかし（src→dst、tmp は作業用）
 function boxBlur(src, nx, ny, rb, tmp, dst) {
@@ -471,8 +465,9 @@ export function start(canvas) {
     const sxOf = (gx) => cx + (ox0 + gx * CELL - g.px) * ppu;
     const syOf = (gy) => cy + (oy0 + gy * CELL - g.py) * ppu;
 
-    // 色なし。尾根谷度を5段階に分け、段ごとにハッチング（谷=密なクロス／尾根=白）。
+    // 色相＝標高の段彩、明度＝尾根谷度（局所相対起伏）の陰影つき段彩。
     const drawTint = () => {
+      // 尾根谷度 = 高さ − 近傍平均（尾根で＋、谷で−）。広めに平均してマダラを抑える。
       boxBlur(grid, nx, ny, RV_BLUR, gridT, gridB);
       let maxAbs = 1e-4;
       for (let k = 0; k < nx * ny; k++) {
@@ -482,40 +477,38 @@ export function start(canvas) {
         if (a > maxAbs) maxAbs = a;
       }
       const scale = 0.5 / Math.max(maxAbs, 0.02);
-      const M = clamp(Math.round(2 * R), 96, 360);
+      const NH = 128; // 標高→色のLUT
+      const hl = new Uint8Array(NH * 3);
+      for (let b = 0; b < NH; b++) {
+        const c = hypso((b + 0.5) / NH);
+        hl[b * 3] = c[0]; hl[b * 3 + 1] = c[1]; hl[b * 3 + 2] = c[2];
+      }
+      const M = clamp(Math.round(2 * R), 96, 340);
       shadeCanvas.width = M; shadeCanvas.height = M;
       const img = shadeCtx.createImageData(M, M);
       const d = img.data;
-      const lw = Math.max(1.2, (2 * R) / M * 1.05); // 線幅(画面px)
       for (let v = 0; v < M; v++) {
         const gyf = (v / (M - 1)) * (ny - 1);
         const j = gyf | 0, fj = gyf - j, j2 = Math.min(ny - 1, j + 1);
-        const wy = (oy0 + gyf * CELL) * ppu; // ワールド基準のスクリーン座標(パンでズレない)
         for (let u = 0; u < M; u++) {
           const gxf = (u / (M - 1)) * (nx - 1);
           const i = gxf | 0, fi = gxf - i, i2 = Math.min(nx - 1, i + 1);
-          const rv = (gridRV[j * nx + i] * (1 - fi) + gridRV[j * nx + i2] * fi) * (1 - fj)
-                   + (gridRV[j2 * nx + i] * (1 - fi) + gridRV[j2 * nx + i2] * fi) * fj;
-          let b = (clamp(0.5 + rv * scale, 0, 1) * 5) | 0;
-          if (b > 4) b = 4;
-          let ink = false;
-          const hb = HATCH[b];
-          if (hb.sp > 0) {
-            const wx = (ox0 + gxf * CELL) * ppu;
-            let p = ((wx + wy) * 0.70710678) % hb.sp; if (p < 0) p += hb.sp;
-            ink = p < lw;
-            if (!ink && hb.cross) {
-              let q = ((wx - wy) * 0.70710678) % hb.sp; if (q < 0) q += hb.sp;
-              ink = q < lw;
-            }
-          }
+          const w00 = (1 - fi) * (1 - fj), w10 = fi * (1 - fj), w01 = (1 - fi) * fj, w11 = fi * fj;
+          const k00 = j * nx + i, k10 = j * nx + i2, k01 = j2 * nx + i, k11 = j2 * nx + i2;
+          const h = grid[k00] * w00 + grid[k10] * w10 + grid[k01] * w01 + grid[k11] * w11;
+          const rv = gridRV[k00] * w00 + gridRV[k10] * w10 + gridRV[k01] * w01 + gridRV[k11] * w11;
+          let hb = (h * NH) | 0; if (hb < 0) hb = 0; else if (hb >= NH) hb = NH - 1;
+          const lb = hb * 3;
+          const shade = lerp(SHADE_LO, SHADE_HI, clamp(0.5 + rv * scale, 0, 1));
           const idx = (v * M + u) * 4;
-          if (ink) { d[idx] = 40; d[idx + 1] = 39; d[idx + 2] = 35; d[idx + 3] = 235; }
-          else d[idx + 3] = 0;
+          d[idx] = Math.min(255, hl[lb] * shade);
+          d[idx + 1] = Math.min(255, hl[lb + 1] * shade);
+          d[idx + 2] = Math.min(255, hl[lb + 2] * shade);
+          d[idx + 3] = 255;
         }
       }
       shadeCtx.putImageData(img, 0, 0);
-      ctx.imageSmoothingEnabled = false; // ハッチはくっきり
+      ctx.imageSmoothingEnabled = true;
       ctx.drawImage(shadeCanvas, sxOf(0), syOf(0), (nx - 1) * CELL * ppu, (ny - 1) * CELL * ppu);
     };
 
