@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 60,           // 1ゲームの長さ(秒)
@@ -92,24 +92,19 @@ void main(){
   c = mix(c, c * 0.5, line * 0.5);
   frag = vec4(c, 1.0);
 }`;
-// 経路用：スクリーン空間で一定幅に押し出す（角度に依らず太さ一定＝パイプ）。同じ深度で隠面。
+// 経路リボン用（同じ投影＋深度。フラットなアクセント色）
 const VERT_LINE = `#version 300 es
-in vec2 aPos; in float aH; in vec2 aPos2; in float aH2; in float aSide;
+in vec2 aPos; in float aH;
 uniform vec2 uCam, uYaw, uTilt, uOrigin, uView;
-uniform float uScale, uZ, uDepth, uHalfW;
-vec3 proj(vec2 pw, float h){
-  float X = pw.x - uCam.x, Y = pw.y - uCam.y;
+uniform float uScale, uZ, uDepth;
+void main(){
+  float X = aPos.x - uCam.x, Y = aPos.y - uCam.y;
   float rx = X*uYaw.x - Y*uYaw.y;
   float ry = X*uYaw.y + Y*uYaw.x;
-  float Z = h * uZ;
-  return vec3(uOrigin.x + rx*uScale, uOrigin.y + ry*uScale*uTilt.x - Z*uScale*uTilt.y, ry);
-}
-void main(){
-  vec3 P = proj(aPos, aH), Q = proj(aPos2, aH2);
-  vec2 d = Q.xy - P.xy; float L = length(d);
-  vec2 nrm = L > 0.0001 ? vec2(-d.y, d.x) / L : vec2(0.0, 1.0);
-  vec2 sp = P.xy + nrm * aSide * uHalfW;
-  gl_Position = vec4(sp.x/uView.x*2.0 - 1.0, 1.0 - sp.y/uView.y*2.0, -P.z*uDepth, 1.0);
+  float Z = aH * uZ;
+  float sx = uOrigin.x + rx*uScale;
+  float sy = uOrigin.y + ry*uScale*uTilt.x - Z*uScale*uTilt.y;
+  gl_Position = vec4(sx/uView.x*2.0 - 1.0, 1.0 - sy/uView.y*2.0, -ry*uDepth, 1.0);
 }`;
 const FRAG_LINE = `#version 300 es
 precision highp float; out vec4 frag; uniform vec4 uColor;
@@ -148,8 +143,7 @@ function setupGL(gl) {
     line: {
       prog: pLine,
       aPos: gl.getAttribLocation(pLine, 'aPos'), aH: gl.getAttribLocation(pLine, 'aH'),
-      aPos2: gl.getAttribLocation(pLine, 'aPos2'), aH2: gl.getAttribLocation(pLine, 'aH2'), aSide: gl.getAttribLocation(pLine, 'aSide'),
-      u: Object.assign(xform(lf), { color: lf('uColor'), halfW: lf('uHalfW') }),
+      u: Object.assign(xform(lf), { color: lf('uColor') }),
     },
   };
 }
@@ -755,17 +749,20 @@ export function start(canvas) {
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
       g.end.glCount = idx.length;
 
-      // 経路：各区間を「自点/相手点/左右」で持つ。幅はシェーダーがスクリーン空間で付ける
-      const pts = g.path, bias = 0.006, pv = [];
-      const vtx = (t, o, side) => pv.push(t.x, t.y, t.h + bias, o.x, o.y, o.h + bias, side);
+      // 経路を地面に沿うリボン（帯）として作る → 深度テストで山に隠れる
+      const pts = g.path, hw = 9, bias = 0.006, pv = [];
       for (let i = 0; i + 1 < pts.length; i++) {
         const a = pts[i], b = pts[i + 1];
-        vtx(a, b, 1); vtx(a, b, -1); vtx(b, a, -1);   // 三角形1
-        vtx(b, a, -1); vtx(a, b, -1); vtx(b, a, 1);   // 三角形2
+        let dxp = b.x - a.x, dyp = b.y - a.y;
+        const L = Math.hypot(dxp, dyp) || 1; dxp /= L; dyp /= L;
+        const px = -dyp * hw, py = dxp * hw;
+        const ah = a.h + bias, bh = b.h + bias;
+        pv.push(a.x + px, a.y + py, ah, a.x - px, a.y - py, ah, b.x + px, b.y + py, bh,
+                b.x + px, b.y + py, bh, a.x - px, a.y - py, ah, b.x - px, b.y - py, bh);
       }
       gl.bindBuffer(gl.ARRAY_BUFFER, glR.pbo);
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pv), gl.STATIC_DRAW);
-      g.end.glPathCount = pv.length / 7;
+      g.end.glPathCount = pv.length / 3;
     }
     g.state = 'end';
     endPointers.clear();
@@ -1331,13 +1328,9 @@ export function start(canvas) {
         const Ln = glR.line;
         gl.useProgram(Ln.prog);
         gl.bindBuffer(gl.ARRAY_BUFFER, glR.pbo);
-        gl.enableVertexAttribArray(Ln.aPos); gl.vertexAttribPointer(Ln.aPos, 2, gl.FLOAT, false, 28, 0);
-        gl.enableVertexAttribArray(Ln.aH); gl.vertexAttribPointer(Ln.aH, 1, gl.FLOAT, false, 28, 8);
-        gl.enableVertexAttribArray(Ln.aPos2); gl.vertexAttribPointer(Ln.aPos2, 2, gl.FLOAT, false, 28, 12);
-        gl.enableVertexAttribArray(Ln.aH2); gl.vertexAttribPointer(Ln.aH2, 1, gl.FLOAT, false, 28, 20);
-        gl.enableVertexAttribArray(Ln.aSide); gl.vertexAttribPointer(Ln.aSide, 1, gl.FLOAT, false, 28, 24);
+        gl.enableVertexAttribArray(Ln.aPos); gl.vertexAttribPointer(Ln.aPos, 2, gl.FLOAT, false, 12, 0);
+        gl.enableVertexAttribArray(Ln.aH); gl.vertexAttribPointer(Ln.aH, 1, gl.FLOAT, false, 12, 8);
         setX(Ln.u);
-        gl.uniform1f(Ln.u.halfW, 3.5); // スクリーン上の半幅(px)
         gl.uniform4f(Ln.u.color, 0.88, 0.32, 0.18, 1.0); // アクセント
         gl.depthMask(false);
         gl.drawArrays(gl.TRIANGLES, 0, e.glPathCount);
