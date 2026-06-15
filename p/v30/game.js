@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 45,           // 1ゲームの長さ(秒)
@@ -50,11 +50,14 @@ const CFG = {
 
 const ITEM_TYPES = ['radar']; // アイテムはレーダーのみ
 const RV_BLUR = 12; // 尾根谷度の近傍半径(セル数。広いほどマダラが減る)
-// 高度カラー(4色): 下から 青→緑→黄土→白。しきいは高さ0..1。
-const ALT4 = [[58, 108, 162], [104, 156, 86], [184, 150, 78], [240, 238, 230]];
-const ALT_TH = [0.18, 0.40, 0.62];
-const SHADE_LO = 0.68; // 谷の暗さ
-const SHADE_HI = 1.16; // 尾根の明るさ
+// 尾根谷度を5段階の明暗で。谷(暗)→尾根(明)。
+const GRAY5 = [
+  [128, 124, 116],
+  [165, 161, 152],
+  [197, 193, 185],
+  [224, 221, 214],
+  [246, 244, 239],
+];
 
 // NPCを撒く（開始地点から離して散らす）
 function spawnNpcs(R) {
@@ -636,7 +639,7 @@ export function start(canvas) {
     const wsx = (wx) => cx + (wx - camx) * ppu; // ワールド→画面
     const wsy = (wy) => cy + (wy - camy) * ppu;
 
-    // 高度カラー(青→緑→黄土→白)に、尾根谷度の陰影(谷=暗/尾根=明)を重ねる。
+    // 色なし。尾根谷度を5段階の明暗で塗る（谷=暗／尾根=明）。
     const drawTint = () => {
       boxBlur(grid, nx, ny, RV_BLUR, gridT, gridB);
       let maxAbs = 1e-4;
@@ -657,17 +660,13 @@ export function start(canvas) {
         for (let u = 0; u < M; u++) {
           const gxf = (u / (M - 1)) * (nx - 1);
           const i = gxf | 0, fi = gxf - i, i2 = Math.min(nx - 1, i + 1);
-          const w00 = (1 - fi) * (1 - fj), w10 = fi * (1 - fj), w01 = (1 - fi) * fj, w11 = fi * fj;
-          const k00 = j * nx + i, k10 = j * nx + i2, k01 = j2 * nx + i, k11 = j2 * nx + i2;
-          const h = grid[k00] * w00 + grid[k10] * w10 + grid[k01] * w01 + grid[k11] * w11;
-          const rv = gridRV[k00] * w00 + gridRV[k10] * w10 + gridRV[k01] * w01 + gridRV[k11] * w11;
-          const c = h < ALT_TH[0] ? ALT4[0] : h < ALT_TH[1] ? ALT4[1] : h < ALT_TH[2] ? ALT4[2] : ALT4[3];
-          const shade = SHADE_LO + (SHADE_HI - SHADE_LO) * clamp(0.5 + rv * scale, 0, 1);
+          const rv = (gridRV[j * nx + i] * (1 - fi) + gridRV[j * nx + i2] * fi) * (1 - fj)
+                   + (gridRV[j2 * nx + i] * (1 - fi) + gridRV[j2 * nx + i2] * fi) * fj;
+          let b = (clamp(0.5 + rv * scale, 0, 1) * 5) | 0;
+          if (b > 4) b = 4;
+          const c = GRAY5[b];
           const idx = (v * M + u) * 4;
-          d[idx] = Math.min(255, c[0] * shade);
-          d[idx + 1] = Math.min(255, c[1] * shade);
-          d[idx + 2] = Math.min(255, c[2] * shade);
-          d[idx + 3] = 255;
+          d[idx] = c[0]; d[idx + 1] = c[1]; d[idx + 2] = c[2]; d[idx + 3] = 255;
         }
       }
       shadeCtx.putImageData(img, 0, 0);
