@@ -1,17 +1,16 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
-  DURATION: 45,           // 1ゲームの長さ(秒)
-  VIEW_RADIUS_WORLD: 235, // 既定(最ズームイン)の視界半径
-  ALWAYS_R: 80,           // 常に見える近距離バブル(これより外は視線遮蔽)
-  ZOOM_MAX_R: 1500,       // ピンチアウトで見渡せる最大の視界半径
+  DURATION: 30,           // 1ゲームの長さ(秒)
+  VIEW_RADIUS_WORLD: 235, // 既定(最ズームイン)の視界半径＝常時見える近距離バブル
+  ZOOM_MAX_R: 1150,       // ピンチアウトで見渡せる最大の視界半径
   GRID_N: 84,             // 等高線サンプルの格子解像度(ズームに依らず一定負荷)
   CONTOUR_STEP: 0.03,     // 等高線の間隔(高さ 0..1)
-  LOS_CONTOURS: 3,        // 視線遮蔽のしきい: 自分の高さ + これ×等高線間隔まで見える
+  LOS_CONTOURS: 5,        // 視線遮蔽のしきい: 自分の高さ + これ×等高線間隔まで見える
   VIEWSHED_RAYS: 96,      // 視線遮蔽を測る方角の数
   VIEWSHED_STEPS: 64,     // 1方角あたりの探索ステップ数
   BASE_SPEED: 100,        // 平地の移動速度(ワールド単位/秒)
@@ -625,7 +624,7 @@ export function start(canvas) {
     const cx = W / 2, cy = H / 2;
     const R = Math.min(W, H) * 0.46;
     const VR = g.viewR;                       // 現在の視界半径(ピンチで変化)
-    const ALWAYS = CFG.ALWAYS_R;               // 常に見える近距離バブル
+    const ALWAYS = CFG.VIEW_RADIUS_WORLD;      // 常に見える近距離バブル
     const N = CFG.GRID_N;
     const CELL = (2 * VR) / (N - 1);           // ズームに応じて格子幅を変える(負荷一定)
     const ppu = R / VR;
@@ -701,7 +700,7 @@ export function start(canvas) {
     };
 
     // 視線遮蔽：拡大時のみ、各方角で「自分の高さ+5等高線」を超える地点まで
-    const occlude = true; // 常時オクルージョン（遮蔽の先は見えない）
+    const occlude = VR > ALWAYS + 1;
     let poly = null;
     if (occlude) {
       const thresh = g.terrain.height(g.px, g.py) + CFG.LOS_CONTOURS * CFG.CONTOUR_STEP;
@@ -744,7 +743,7 @@ export function start(canvas) {
       ctx.moveTo(poly[0][0], poly[0][1]);
       for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
       ctx.closePath();
-      ctx.fillStyle = 'rgba(231,229,222,0.7)'; // 未踏の白地図ふうに軽く伏せる
+      ctx.fillStyle = 'rgba(150,146,135,0.28)';
       ctx.fill('evenodd');
 
       // 地平線（尾根の稜線）を淡く
