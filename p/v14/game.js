@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -482,17 +482,11 @@ export function start(canvas) {
         if (a > maxAbs) maxAbs = a;
       }
       const scale = 0.5 / Math.max(maxAbs, 0.02);
-      const M = clamp(Math.round(2 * R), 96, 460);
+      const M = clamp(Math.round(2 * R), 96, 360);
       shadeCanvas.width = M; shadeCanvas.height = M;
       const img = shadeCtx.createImageData(M, M);
       const d = img.data;
-      // 薄茶色・細線・カバレッジでアンチエイリアス
-      const CR = 150, CG = 118, CB = 84, AMAX = 150;
-      const halfW = 0.42, feather = 0.85; // 画面px
-      const covOf = (p, sp) => {
-        const dist = Math.min(p, sp - p);
-        return clamp(1 - (dist - halfW) / feather, 0, 1);
-      };
+      const lw = Math.max(1.2, (2 * R) / M * 1.05); // 線幅(画面px)
       for (let v = 0; v < M; v++) {
         const gyf = (v / (M - 1)) * (ny - 1);
         const j = gyf | 0, fj = gyf - j, j2 = Math.min(ny - 1, j + 1);
@@ -504,25 +498,24 @@ export function start(canvas) {
                    + (gridRV[j2 * nx + i] * (1 - fi) + gridRV[j2 * nx + i2] * fi) * fj;
           let b = (clamp(0.5 + rv * scale, 0, 1) * 5) | 0;
           if (b > 4) b = 4;
+          let ink = false;
           const hb = HATCH[b];
-          let cov = 0;
           if (hb.sp > 0) {
             const wx = (ox0 + gxf * CELL) * ppu;
             let p = ((wx + wy) * 0.70710678) % hb.sp; if (p < 0) p += hb.sp;
-            cov = covOf(p, hb.sp);
-            if (hb.cross) {
+            ink = p < lw;
+            if (!ink && hb.cross) {
               let q = ((wx - wy) * 0.70710678) % hb.sp; if (q < 0) q += hb.sp;
-              const c2 = covOf(q, hb.sp);
-              if (c2 > cov) cov = c2;
+              ink = q < lw;
             }
           }
           const idx = (v * M + u) * 4;
-          if (cov > 0) { d[idx] = CR; d[idx + 1] = CG; d[idx + 2] = CB; d[idx + 3] = (cov * AMAX) | 0; }
+          if (ink) { d[idx] = 40; d[idx + 1] = 39; d[idx + 2] = 35; d[idx + 3] = 235; }
           else d[idx + 3] = 0;
         }
       }
       shadeCtx.putImageData(img, 0, 0);
-      ctx.imageSmoothingEnabled = true; // 補間でさらに滑らかに
+      ctx.imageSmoothingEnabled = false; // ハッチはくっきり
       ctx.drawImage(shadeCanvas, sxOf(0), syOf(0), (nx - 1) * CELL * ppu, (ny - 1) * CELL * ppu);
     };
 
