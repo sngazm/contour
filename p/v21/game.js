@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -35,7 +35,7 @@ const CFG = {
   GLOVE_FALL_MUL: 2.6,    // グローブ装備で転落しにくくなる倍率
   NPC_COUNT: 10,          // NPCの数
   NPC_SPEED: 62,          // NPCの基礎速度(プレイヤーより遅い)
-  NPC_AGGRO: 118,         // 索敵半径＝プレイヤー視界(235)の半分。先に気づかれにくい
+  NPC_AGGRO: 520,         // この距離以内ならプレイヤーを追う
   NPC_PUSH_R: 26,         // この距離で突き落とす
   NPC_PUSH_SPEED: 250,    // 突き落としの初速
   NPC_VISION_CONTOURS: 3, // NPCは自分より これ×等高線 以上高い地形の向こうが見えない
