@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -43,8 +43,6 @@ const CFG = {
   PLAYER_CHARGE: 1.15,    // この速度係数以上で突っ込むと逆にNPCを突き落とせる
   NPC_SATISFIED: 4.5,     // 突き落とした後、満足して登りに戻る秒数(追跡しない)
   PUSH_GRACE: 1.3,        // 放心から復帰した直後、突かれない猶予秒数(ハメ防止)
-  NPC_LOOK_R: 320,        // NPCが登り目標を探す範囲(広い範囲で登る)
-  NPC_DOWN: 6,            // 撃破されたNPCの放心秒数(消えずに復帰)
 };
 
 const ITEM_TYPES = ['glove', 'goggle', 'zip'];
@@ -64,7 +62,7 @@ function spawnNpcs(R) {
   for (let i = 0; i < CFG.NPC_COUNT; i++) {
     const a = Math.random() * TAU;
     const r = 260 + Math.random() * (R - 320);
-    list.push({ x: Math.cos(a) * r, y: Math.sin(a) * r, chaseT: 0, satT: 0, down: 0, goal: null, goalT: 0 });
+    list.push({ x: Math.cos(a) * r, y: Math.sin(a) * r, chaseT: 0, satT: 0 });
   }
   return list;
 }
@@ -423,13 +421,11 @@ export function start(canvas) {
           }
         }
       }
-      // NPC：広い範囲で高い所へ登る／プレイヤーが見えて近いと追跡し突き落とす
-      let anyPush = false;
+      // NPC：普段は局所最高点へ／プレイヤーが見えて近いと追跡し突き落とす
       for (const n of g.npcs) {
-        if (n.down > 0) { n.down -= dt; continue; } // 撃破された放心中は無効
         const dpx = g.px - n.x, dpy = g.py - n.y;
         const dp = Math.hypot(dpx, dpy);
-        if (n.satT > 0) n.satT -= dt;
+        if (n.satT > 0) n.satT -= dt; // 突き落とした後は満足して登りに専念
         // 視線：自分より3等高線以上高い地形に遮られると見えない（満足中は追わない）
         let sees = false;
         if (n.satT <= 0 && dp < CFG.NPC_AGGRO && dp > 1e-3) {
@@ -442,51 +438,30 @@ export function start(canvas) {
         }
         if (sees) n.chaseT = CFG.NPC_CHASE_MEMORY; else if (n.chaseT > 0) n.chaseT -= dt;
         const chasing = n.chaseT > 0;
-
-        let dirx = 0, diry = 0;
-        if (chasing && dp > 1e-3) {
-          dirx = dpx / dp; diry = dpy / dp;
-        } else {
-          // 広い範囲を見渡して、より高い地点を目標に登る（局所に留まらない）
-          n.goalT -= dt;
-          if (!n.goal || n.goalT <= 0 || Math.hypot(n.goal.x - n.x, n.goal.y - n.y) < 30) {
-            const R = CFG.NPC_LOOK_R;
-            let best = { x: n.x, y: n.y, h: g.terrain.height(n.x, n.y) }, found = false;
-            for (let a = 0; a < 8; a++) {
-              const th = (a / 8) * TAU;
-              for (const rr of [R * 0.6, R]) {
-                const qx = n.x + Math.cos(th) * rr, qy = n.y + Math.sin(th) * rr;
-                const h = g.terrain.height(qx, qy);
-                if (h > best.h) { best = { x: qx, y: qy, h }; found = true; }
-              }
-            }
-            if (!found) { const th = Math.random() * TAU; best = { x: n.x + Math.cos(th) * R, y: n.y + Math.sin(th) * R }; }
-            n.goal = { x: best.x, y: best.y };
-            n.goalT = 2.5 + Math.random() * 2;
-          }
-          const gx2 = n.goal.x - n.x, gy2 = n.goal.y - n.y, gd = Math.hypot(gx2, gy2);
-          if (gd > 1e-3) { dirx = gx2 / gd; diry = gy2 / gd; }
-        }
         g.terrain.gradient(n.x, n.y, grad);
+        const m = Math.hypot(grad.x, grad.y);
+        let dirx = 0, diry = 0;
+        if (chasing && dp > 1e-3) { dirx = dpx / dp; diry = dpy / dp; }
+        else if (m > 1e-6) { dirx = grad.x / m; diry = grad.y / m; }
         const along = grad.x * dirx + grad.y * diry;
         const f = clamp(1 - along * CFG.UPHILL_K, 0.3, 1.4);
         const sp = CFG.NPC_SPEED * f * dt;
         n.x += dirx * sp; n.y += diry * sp;
         const nd = Math.hypot(n.x, n.y);
         if (nd > g.field.r) { n.x *= g.field.r / nd; n.y *= g.field.r / nd; }
-        // 接触：速度を乗せて突っ込めば撃破(6秒放心)／そうでなければ突かれる
+        // 接触：プレイヤーが速度を乗せていれば逆に突き落とす／そうでなければ突かれる
         if (dp < CFG.NPC_PUSH_R && !g.fall && g.stun <= 0) {
-          const ux = dpx / (dp || 1), uy = dpy / (dp || 1);
           if (g.curSpeed > CFG.PLAYER_CHARGE) {
-            n.x -= ux * 40; n.y -= uy * 40; n.down = CFG.NPC_DOWN; n.chaseT = 0;
+            n.dead = true; // やっつけた
           } else if (g.grace <= 0 && n.satT <= 0) {
+            const ux = dpx / (dp || 1), uy = dpy / (dp || 1);
             g.fall = { vx: ux * CFG.NPC_PUSH_SPEED, vy: uy * CFG.NPC_PUSH_SPEED, t: 0 };
             n.x -= ux * 30; n.y -= uy * 30;
-            anyPush = true;
+            n.satT = CFG.NPC_SATISFIED; n.chaseT = 0; // 満足して登りに戻る
           }
         }
       }
-      if (anyPush) for (const n of g.npcs) { n.satT = CFG.NPC_SATISFIED; n.chaseT = 0; } // 全員満足
+      if (g.npcs.some((n) => n.dead)) g.npcs = g.npcs.filter((n) => !n.dead);
       if (g.time >= CFG.DURATION) beginEnd();
       return;
     }
@@ -774,21 +749,6 @@ export function start(canvas) {
       const ddx = n.x - g.px, ddy = n.y - g.py;
       if (Math.hypot(ddx, ddy) >= VR) continue;
       const sx = cx + ddx * ppu, sy = cy + ddy * ppu;
-      if (n.down > 0) {
-        // 撃破され放心中：薄く＋回復リング
-        ctx.globalAlpha = 0.45;
-        ctx.fillStyle = '#46423b';
-        ctx.beginPath();
-        ctx.arc(sx, sy, 5.5, 0, TAU);
-        ctx.fill();
-        ctx.globalAlpha = 1;
-        ctx.strokeStyle = 'rgba(38,37,31,0.3)';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.arc(sx, sy, 8, -Math.PI / 2, -Math.PI / 2 + clamp(n.down / CFG.NPC_DOWN, 0, 1) * TAU);
-        ctx.stroke();
-        continue;
-      }
       const chasing = n.chaseT > 0;
       ctx.fillStyle = '#46423b';
       ctx.beginPath();
