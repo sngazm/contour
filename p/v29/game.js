@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 45,           // 1ゲームの長さ(秒)
@@ -13,7 +13,7 @@ const CFG = {
   CONTOUR_STEP: 0.03,     // 等高線の間隔(高さ 0..1)
   LOS_CONTOURS: 3,        // 視線遮蔽のしきい: 自分の高さ + これ×等高線間隔まで見える
   VIEWSHED_RAYS: 96,      // 視線遮蔽を測る方角の数
-  VIEWSHED_STEPS: 88,     // 1方角あたりの探索ステップ数
+  VIEWSHED_STEPS: 64,     // 1方角あたりの探索ステップ数
   BASE_SPEED: 100,        // 平地の移動速度(ワールド単位/秒)
   UPHILL_K: 400,          // 斜面が速度に効く強さ
   SPEED_MIN: 0.16,        // 急登での下限係数
@@ -48,7 +48,7 @@ const CFG = {
   NPC_DOWN: 6,            // 撃破されたNPCの放心秒数(消えずに復帰)
 };
 
-const ITEM_TYPES = ['radar']; // アイテムはレーダーのみ
+const ITEM_TYPES = ['glove', 'goggle', 'zip'];
 const RV_BLUR = 12; // 尾根谷度の近傍半径(セル数。広いほどマダラが減る)
 // 尾根谷度を5段階の明暗で。谷(暗)→尾根(明)。
 const GRAY5 = [
@@ -126,13 +126,7 @@ function drawItemGlyph(ctx, x, y, type, s, color) {
   ctx.lineWidth = Math.max(1.4, s * 0.16);
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
-  if (type === 'radar') {
-    // 同心円＋掃引線
-    ctx.beginPath(); ctx.arc(x, y, s * 0.85, 0, TAU); ctx.stroke();
-    ctx.beginPath(); ctx.arc(x, y, s * 0.45, 0, TAU); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + s * 0.85, y - s * 0.5); ctx.stroke();
-    ctx.beginPath(); ctx.arc(x, y, s * 0.16, 0, TAU); ctx.fill();
-  } else if (type === 'glove') {
+  if (type === 'glove') {
     // 二段のシェブロン（登る／上へ）
     for (let k = 0; k < 2; k++) {
       const o = -s * 0.5 + k * s * 0.55;
@@ -218,14 +212,21 @@ export function start(canvas) {
   let game;
   let endDrag = null; // リザルトでの orbit/タップ判定
 
-  // 右下のレーダーボタン（所持時に表示）。押すと1回ズームアウトして偵察できる。
+  // 右下のビュー切替ボタン（拡大/縮小アイコンを切替）
   const viewBtn = document.getElementById('viewbtn');
-  const ICON_RADAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 12l8-5"/></svg>';
+  const ICON_EXPAND = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H4v4M16 3h4v4M8 21H4v-4M16 21h4v-4"/></svg>';
+  const ICON_CONTRACT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h4V4M20 8h-4V4M4 16h4v4M20 16h-4v4"/></svg>';
+  function setFar(v) {
+    game.far = v;
+    if (viewBtn) {
+      viewBtn.classList.toggle('far', v);
+      viewBtn.innerHTML = v ? ICON_CONTRACT : ICON_EXPAND;
+    }
+  }
   if (viewBtn) {
-    viewBtn.innerHTML = ICON_RADAR;
+    viewBtn.innerHTML = ICON_EXPAND;
     viewBtn.addEventListener('click', () => {
-      const g = game;
-      if (g.state === 'play' && g.radar > 0 && !g.far) { g.far = true; g.radar -= 1; }
+      if (game.state === 'ready' || game.state === 'play') setFar(!game.far);
     });
   }
 
@@ -237,12 +238,13 @@ export function start(canvas) {
       field: { r: CFG.FIELD_R, max: findFieldMax(terrain, CFG.FIELD_R) },
       state: 'ready',
       time: 0,
-      far: false,                   // レーダー偵察中(ズームアウト)か
-      viewR: CFG.VIEW_RADIUS_WORLD, // 現在の視界半径(補間用)
+      far: false,                   // ビュー段階: false=通常 / true=最大引き
+      viewR: CFG.VIEW_RADIUS_WORLD, // 現在の視界半径(段階へ向けて補間)
       px: 0, py: 0,
       best: terrain.height(0, 0), // 到達した最高高度（自己記録＝スコア）
       flash: 0,                   // 記録更新の演出タイマー
-      radar: 0,             // レーダー所持数(1回ぶんのズームアウト)
+      items: { glove: false, goggle: false, zip: false },
+      zipCharges: 0,        // ジップラインの残り使用回数(取得ごとに+1)
       pickups: spawnItems(CFG.FIELD_R),
       npcs: spawnNpcs(CFG.FIELD_R),
       riding: null,         // ジップライン移動中の目標 {tx,ty}
@@ -259,7 +261,7 @@ export function start(canvas) {
     input.state.everPressed = false;
     input.state.zoomReq = 0;
     endDrag = null;
-    if (viewBtn) viewBtn.style.display = 'none';
+    if (viewBtn) { viewBtn.classList.remove('far'); viewBtn.innerHTML = ICON_EXPAND; viewBtn.style.display = ''; }
   }
   newGame();
 
@@ -305,6 +307,22 @@ export function start(canvas) {
       else if (endDrag.moved) game.end.cam.yawVel = (endDrag.vyaw || 0) * 16; // 慣性
       endDrag = null;
     } else if (tapInfo) {
+      // 動かさない短いタップ＝ジップライン展開（残回数があり、円の視界内のみ）
+      if (game.state === 'play' && game.zipCharges > 0 && !game.riding && !tapInfo.moved &&
+          performance.now() - tapInfo.t < 350) {
+        const r = canvas.getBoundingClientRect();
+        const sx = tapInfo.x - r.left, sy = tapInfo.y - r.top;
+        const R = Math.min(r.width, r.height) * 0.46;
+        const inCircle = Math.hypot(sx - r.width / 2, sy - r.height / 2) <= R;
+        if (inCircle) {
+          const w = screenToWorld(sx, sy);
+          let tx = w.x, ty = w.y;
+          const td = Math.hypot(tx, ty);
+          if (td > game.field.r) { tx *= game.field.r / td; ty *= game.field.r / td; }
+          game.riding = { tx, ty };
+          game.zipCharges -= 1;
+        }
+      }
       tapInfo = null;
     }
   });
@@ -313,11 +331,11 @@ export function start(canvas) {
   function update(dt) {
     const g = game;
     if (g.state === 'ready' || g.state === 'play') {
-      input.consumeZoomReq(); // ピンチ/ホイールのズームは使わない(レーダー制)
-      if (g.far && input.read().mag > 0) g.far = false; // 動き出したら偵察解除
+      const zr = input.consumeZoomReq();
+      if (zr > 0) setFar(false);
+      else if (zr < 0) setFar(true);
       const target = g.far ? CFG.ZOOM_MAX_R : CFG.VIEW_RADIUS_WORLD;
-      g.viewR += (target - g.viewR) * Math.min(1, dt * 8);
-      if (viewBtn) viewBtn.style.display = (g.state === 'play' && g.radar > 0 && !g.far) ? '' : 'none';
+      g.viewR += (target - g.viewR) * Math.min(1, dt * 10); // 段階間を素早く補間
     }
     if (g.state === 'ready') {
       g.readyPulse += dt;
@@ -375,7 +393,8 @@ export function start(canvas) {
         // 転落判定：急すぎる／急斜面で登っていない なら転がり落ちる
         g.terrain.gradient(g.px, g.py, grad);
         const steep = Math.hypot(grad.x, grad.y);
-        const fallS = CFG.FALL_SLOPE, climbMax = CFG.CLIMB_MAX;
+        const mul = g.items.glove ? CFG.GLOVE_FALL_MUL : 1;
+        const fallS = CFG.FALL_SLOPE * mul, climbMax = CFG.CLIMB_MAX * mul;
         const climbing = mv.mag > 0.25 && (grad.x * mv.x + grad.y * mv.y) > 0; // 上りへ踏ん張る
         if (steep > climbMax || (steep > fallS && !climbing)) {
           g.fall = { vx: 0, vy: 0, t: 0 };
@@ -386,7 +405,10 @@ export function start(canvas) {
           const hA = g.terrain.height(g.px + mv.x * D, g.py + mv.y * D);
           const hB = g.terrain.height(g.px - mv.x * D, g.py - mv.y * D);
           const along = (hA - hB) / (2 * D); // +で登り
-          const f = clamp(1 - along * CFG.UPHILL_K, CFG.SPEED_MIN, CFG.SPEED_MAX);
+          const k = g.items.glove ? CFG.UPHILL_K * CFG.GLOVE_K_MUL : CFG.UPHILL_K;
+          const minF = g.items.glove ? CFG.GLOVE_MIN : CFG.SPEED_MIN;
+          const maxF = g.items.glove ? CFG.GLOVE_MAX : CFG.SPEED_MAX; // 装備時は下りが軽快でない
+          const f = clamp(1 - along * k, minF, maxF);
           const sp = CFG.BASE_SPEED * f * mv.mag * dt;
           g.px += mv.x * sp;
           g.py += mv.y * sp;
@@ -402,11 +424,12 @@ export function start(canvas) {
         if (Math.hypot(g.px - last.x, g.py - last.y) >= CFG.PATH_MIN_STEP) {
           g.path.push({ x: g.px, y: g.py, h: g.terrain.height(g.px, g.py) });
         }
-        // アイテム取得（レーダー）
+        // アイテム取得
         for (const it of g.pickups) {
           if (!it.taken && Math.hypot(g.px - it.x, g.py - it.y) < CFG.PICKUP_R) {
             it.taken = true;
-            if (it.type === 'radar') g.radar += 1;
+            g.items[it.type] = true;
+            if (it.type === 'zip') g.zipCharges += 1; // 取得ごとに1回ぶん
           }
         }
       }
@@ -612,7 +635,7 @@ export function start(canvas) {
     const blend = clamp((g.viewR - NORMAL) / (CFG.ZOOM_MAX_R - NORMAL), 0, 1);
     const camx = lerp(g.px, 0, blend), camy = lerp(g.py, 0, blend);
     const frameR = lerp(NORMAL, CFG.FIELD_R * 1.07, blend); // 画面に収める半径
-    const sightR = lerp(NORMAL, 2 * CFG.FIELD_R, blend);    // 見通せる距離（遮蔽だけが限界）
+    const sightR = lerp(NORMAL, CFG.ZOOM_MAX_R, blend);     // プレイヤーが見通せる距離
     const ppu = R / frameR;
     const CELL = (2 * frameR) / (N - 1);
 
@@ -854,6 +877,19 @@ export function start(canvas) {
       ctx.fill();
     }
 
+    // 最高地点：ゴーグル所持時のみ、視界に入っていればマーク
+    const pk = g.field.max;
+    if (g.items.goggle && visibleAt(pk.x, pk.y)) {
+      const sxp = wsx(pk.x), syp = wsy(pk.y);
+      ctx.strokeStyle = `rgba(200,146,10,${0.7 * (1 - itemPulse)})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sxp, syp, 5 + itemPulse * 16, 0, TAU);
+      ctx.stroke();
+      ctx.fillStyle = COL.peak;
+      drawTriangle(sxp, syp - 3, 7);
+      ctx.fill();
+    }
 
     // フィールド境界（世界の縁）。外側を陰らせ、縁を線で示す
     {
@@ -887,6 +923,21 @@ export function start(canvas) {
     ctx.beginPath();
     ctx.arc(cx, cy, R, 0, TAU);
     ctx.stroke();
+
+    // 最高地点の方角をリング上に表示（ゴーグル所持時のみ＝コンパス）
+    if (g.items.goggle) {
+      const ddx = pk.x - g.px, ddy = pk.y - g.py;
+      if (Math.hypot(ddx, ddy) > 1) {
+        const bearing = Math.atan2(ddy, ddx);
+        ctx.save();
+        ctx.translate(cx + Math.cos(bearing) * R, cy + Math.sin(bearing) * R);
+        ctx.rotate(bearing + Math.PI / 2);
+        ctx.fillStyle = COL.peak;
+        drawTriangle(0, 0, 8);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
 
     // 残り時間リング
     if (g.state === 'play') {
@@ -973,16 +1024,23 @@ export function start(canvas) {
 
     drawHud(g.terrain.height(g.px, g.py), g.field.max.h, g.best, g.flash);
 
-    // レーダー所持数を左下に小さく
-    if (g.radar > 0) {
+    // 所持アビリティを左下に小さく（ジップは残回数があるときだけ）
+    {
+      let n = 0;
       const bx = 26, by = H - 28;
-      drawItemGlyph(ctx, bx, by, 'radar', 9, COL.item);
-      if (g.radar > 1) {
-        ctx.fillStyle = COL.item;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.font = '600 11px ui-monospace, Menlo, monospace';
-        ctx.fillText('×' + g.radar, bx + 15, by + 8);
+      for (const t of ITEM_TYPES) {
+        const have = t === 'zip' ? g.zipCharges > 0 : g.items[t];
+        if (!have) continue;
+        const x = bx + n * 32;
+        drawItemGlyph(ctx, x, by, t, 9, COL.item);
+        if (t === 'zip' && g.zipCharges > 1) {
+          ctx.fillStyle = COL.item;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.font = '600 11px ui-monospace, Menlo, monospace';
+          ctx.fillText('×' + g.zipCharges, x + 14, by + 8);
+        }
+        n++;
       }
     }
 
