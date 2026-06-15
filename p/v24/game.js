@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -33,7 +33,7 @@ const CFG = {
   FALL_ACCEL: 220000,     // 転落の加速(傾斜に比例)
   FALL_DRAG: 3,           // 転落の減衰(/秒)
   GLOVE_FALL_MUL: 2.6,    // グローブ装備で転落しにくくなる倍率
-  NPC_COUNT: 0,           // NPCの数(0で無効。コードは残置)
+  NPC_COUNT: 5,           // NPCの数
   NPC_SPEED: 62,          // NPCの基礎速度(プレイヤーより遅い)
   NPC_AGGRO: 118,         // 索敵半径＝プレイヤー視界(235)の半分。先に気づかれにくい
   NPC_PUSH_R: 26,         // この距離で突き落とす
@@ -240,7 +240,6 @@ export function start(canvas) {
       far: false,                   // ビュー段階: false=通常 / true=最大引き
       viewR: CFG.VIEW_RADIUS_WORLD, // 現在の視界半径(段階へ向けて補間)
       px: 0, py: 0,
-      score: 0,             // 滞在高度の積分（高い場所に長くいるほど加点）
       items: { glove: false, goggle: false, zip: false },
       zipCharges: 0,        // ジップラインの残り使用回数(取得ごとに+1)
       pickups: spawnItems(CFG.FIELD_R),
@@ -338,7 +337,6 @@ export function start(canvas) {
     }
     if (g.state === 'play') {
       g.time += dt;
-      g.score += g.terrain.height(g.px, g.py) * dt; // 高所に長くいるほど加点
       if (g.grace > 0) g.grace -= dt;
       let moved = false;
       g.curSpeed = 0;
@@ -590,8 +588,8 @@ export function start(canvas) {
     if (viewBtn) viewBtn.style.display = 'none';
   }
 
-  // 数値表示（▲=フィールド最高 / ●=現在地 / Σ=累積スコア）。常時表示。
-  function drawHud(playerH, maxH, score) {
+  // 高度の数値表示（▲=フィールド最高 / ●=現在地）。常時表示。
+  function drawHud(playerH, maxH) {
     const top = 26;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -600,9 +598,6 @@ export function start(canvas) {
     ctx.fillText('▲ ' + altOf(maxH), W / 2, top);
     ctx.fillStyle = '#26251f';
     ctx.fillText('● ' + altOf(playerH), W / 2, top + 24);
-    ctx.font = '600 13px ui-monospace, "SF Mono", Menlo, monospace';
-    ctx.fillStyle = 'rgba(40,39,35,0.5)';
-    ctx.fillText('Σ ' + Math.round(score * 100), W / 2, top + 47);
   }
 
   function drawTriangle(x, y, s) {
@@ -980,7 +975,7 @@ export function start(canvas) {
       ctx.fill();
     }
 
-    drawHud(g.terrain.height(g.px, g.py), g.field.max.h, g.score);
+    drawHud(g.terrain.height(g.px, g.py), g.field.max.h);
 
     // 所持アビリティを左下に小さく（ジップは残回数があるときだけ）
     {
@@ -1148,14 +1143,7 @@ export function start(canvas) {
 
     if (masking) ctx.restore();
 
-    // 最終スコア（大きく）
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = `700 ${Math.min(W, H) * 0.13}px ui-monospace, "SF Mono", Menlo, monospace`;
-    ctx.fillStyle = 'rgba(38,37,31,0.9)';
-    ctx.fillText(String(Math.round(g.score * 100)), W / 2, H * 0.19);
-
-    drawHud(ep.h, g.field.max.h, g.score);
+    drawHud(ep.h, g.field.max.h);
 
     // 再挑戦を促す微かなパルス（イントロ後・言葉なし）
     if (e.t > 2.2) {
