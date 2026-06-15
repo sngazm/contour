@@ -1,18 +1,14 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
-  VIEW_RADIUS_WORLD: 235, // 既定(最ズームイン)の視界半径＝常時見える近距離バブル
-  ZOOM_MAX_R: 1150,       // ピンチアウトで見渡せる最大の視界半径
-  GRID_N: 84,             // 等高線サンプルの格子解像度(ズームに依らず一定負荷)
+  VIEW_RADIUS_WORLD: 235, // 円窓の中心→縁が示すワールド距離
+  CELL: 7,                // ワールド固定格子のセル幅(等高線のうねり防止)
   CONTOUR_STEP: 0.03,     // 等高線の間隔(高さ 0..1)
-  LOS_CONTOURS: 5,        // 視線遮蔽のしきい: 自分の高さ + これ×等高線間隔まで見える
-  VIEWSHED_RAYS: 96,      // 視線遮蔽を測る方角の数
-  VIEWSHED_STEPS: 64,     // 1方角あたりの探索ステップ数
   BASE_SPEED: 100,        // 平地の移動速度(ワールド単位/秒)
   UPHILL_K: 300,          // 斜面が速度に効く強さ
   SPEED_MIN: 0.16,        // 急登での下限係数
@@ -99,14 +95,12 @@ export function start(canvas) {
       field: { r: CFG.FIELD_R, max: findFieldMax(terrain, CFG.FIELD_R) },
       state: 'ready',
       time: 0,
-      viewR: CFG.VIEW_RADIUS_WORLD, // 現在の視界半径(ピンチで変化)
       px: 0, py: 0,
       path: [{ x: 0, y: 0, h: terrain.height(0, 0) }],
       readyPulse: 0,
       end: null,
     };
     input.state.everPressed = false;
-    input.state.pinch = 1;
     endDrag = null;
   }
   newGame();
@@ -137,10 +131,6 @@ export function start(canvas) {
   // ---- 更新 ----------------------------------------------------------------
   function update(dt) {
     const g = game;
-    if (g.state === 'ready' || g.state === 'play') {
-      const pz = input.consumePinch();
-      if (pz !== 1) g.viewR = clamp(g.viewR * pz, CFG.VIEW_RADIUS_WORLD, CFG.ZOOM_MAX_R);
-    }
     if (g.state === 'ready') {
       g.readyPulse += dt;
       if (input.read().mag > 0) g.state = 'play';
@@ -259,16 +249,21 @@ export function start(canvas) {
     const g = game;
     const cx = W / 2, cy = H / 2;
     const R = Math.min(W, H) * 0.46;
-    const VR = g.viewR;                       // 現在の視界半径(ピンチで変化)
-    const ALWAYS = CFG.VIEW_RADIUS_WORLD;      // 常に見える近距離バブル
-    const N = CFG.GRID_N;
-    const CELL = (2 * VR) / (N - 1);           // ズームに応じて格子幅を変える(負荷一定)
+    const VR = CFG.VIEW_RADIUS_WORLD;
+    const CELL = CFG.CELL;
     const ppu = R / VR;
 
     ctx.fillStyle = COL.out;
     ctx.fillRect(0, 0, W, H);
 
-    // ワールドに整列した格子をサンプリング（パン中もうねらない）
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, 0, TAU);
+    ctx.clip();
+    ctx.fillStyle = COL.lens;
+    ctx.fillRect(cx - R, cy - R, 2 * R, 2 * R);
+
+    // ワールドに固定した格子をサンプリング（視点移動でうねらない）
     const ox0 = Math.floor((g.px - VR) / CELL) * CELL;
     const oy0 = Math.floor((g.py - VR) / CELL) * CELL;
     const nx = Math.ceil((2 * VR) / CELL) + 2;
@@ -283,79 +278,19 @@ export function start(canvas) {
         if (h > gmax) gmax = h;
       }
     }
+
     const sxOf = (gx) => cx + (ox0 + gx * CELL - g.px) * ppu;
     const syOf = (gy) => cy + (oy0 + gy * CELL - g.py) * ppu;
-
-    const drawContours = () => {
-      for (const lv of levelsFor(gmin, gmax, CFG.CONTOUR_STEP)) {
-        const major = Math.round(lv / CFG.CONTOUR_STEP) % 5 === 0;
-        ctx.strokeStyle = major ? COL.inkMajor : COL.ink;
-        ctx.lineWidth = major ? 1.6 : 1;
-        ctx.beginPath();
-        contourLevel(grid, nx, ny, lv, (a, b, c, d) => {
-          ctx.moveTo(sxOf(a), syOf(b));
-          ctx.lineTo(sxOf(c), syOf(d));
-        });
-        ctx.stroke();
-      }
-    };
-
-    // 視線遮蔽：拡大時のみ、各方角で「自分の高さ+5等高線」を超える地点まで
-    const occlude = VR > ALWAYS + 1;
-    let poly = null;
-    if (occlude) {
-      const thresh = g.terrain.height(g.px, g.py) + CFG.LOS_CONTOURS * CFG.CONTOUR_STEP;
-      const RAYS = CFG.VIEWSHED_RAYS, STEPS = CFG.VIEWSHED_STEPS;
-      poly = [];
-      for (let a = 0; a < RAYS; a++) {
-        const th = (a / RAYS) * TAU;
-        const dc = Math.cos(th), ds = Math.sin(th);
-        let rb = VR;
-        for (let k = 1; k <= STEPS; k++) {
-          const r = ALWAYS + (VR - ALWAYS) * (k / STEPS);
-          if (g.terrain.height(g.px + dc * r, g.py + ds * r) > thresh) { rb = r; break; }
-        }
-        poly.push([cx + dc * rb * ppu, cy + ds * rb * ppu]);
-      }
-    }
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(cx, cy, R, 0, TAU);
-    ctx.clip();
-    ctx.fillStyle = COL.lens;
-    ctx.fillRect(cx - R, cy - R, 2 * R, 2 * R);
-
-    if (occlude) {
-      // 見える範囲だけに等高線を描く
-      ctx.save();
+    for (const lv of levelsFor(gmin, gmax, CFG.CONTOUR_STEP)) {
+      const major = Math.round(lv / CFG.CONTOUR_STEP) % 5 === 0;
+      ctx.strokeStyle = major ? COL.inkMajor : COL.ink;
+      ctx.lineWidth = major ? 1.6 : 1;
       ctx.beginPath();
-      ctx.moveTo(poly[0][0], poly[0][1]);
-      for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
-      ctx.closePath();
-      ctx.clip();
-      drawContours();
-      ctx.restore();
-
-      // 遮蔽された側はもやで埋める（多角形を穴にした even-odd 塗り）
-      ctx.beginPath();
-      ctx.rect(cx - R, cy - R, 2 * R, 2 * R);
-      ctx.moveTo(poly[0][0], poly[0][1]);
-      for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
-      ctx.closePath();
-      ctx.fillStyle = 'rgba(150,146,135,0.28)';
-      ctx.fill('evenodd');
-
-      // 地平線（尾根の稜線）を淡く
-      ctx.beginPath();
-      ctx.moveTo(poly[0][0], poly[0][1]);
-      for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
-      ctx.closePath();
-      ctx.strokeStyle = 'rgba(40,39,35,0.22)';
-      ctx.lineWidth = 1.5;
+      contourLevel(grid, nx, ny, lv, (a, b, c, d) => {
+        ctx.moveTo(sxOf(a), syOf(b));
+        ctx.lineTo(sxOf(c), syOf(d));
+      });
       ctx.stroke();
-    } else {
-      drawContours();
     }
 
     // ふちを軽く沈めてレンズ感を出す
