@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -41,8 +41,6 @@ const CFG = {
   NPC_VISION_CONTOURS: 3, // NPCは自分より これ×等高線 以上高い地形の向こうが見えない
   NPC_CHASE_MEMORY: 0.8,  // 見失ってから追跡を続ける秒数
   PLAYER_CHARGE: 1.15,    // この速度係数以上で突っ込むと逆にNPCを突き落とせる
-  NPC_SATISFIED: 4.5,     // 突き落とした後、満足して登りに戻る秒数(追跡しない)
-  PUSH_GRACE: 1.3,        // 放心から復帰した直後、突かれない猶予秒数(ハメ防止)
 };
 
 const ITEM_TYPES = ['glove', 'goggle', 'zip'];
@@ -62,7 +60,7 @@ function spawnNpcs(R) {
   for (let i = 0; i < CFG.NPC_COUNT; i++) {
     const a = Math.random() * TAU;
     const r = 260 + Math.random() * (R - 320);
-    list.push({ x: Math.cos(a) * r, y: Math.sin(a) * r, chaseT: 0, satT: 0 });
+    list.push({ x: Math.cos(a) * r, y: Math.sin(a) * r, chaseT: 0 });
   }
   return list;
 }
@@ -246,7 +244,6 @@ export function start(canvas) {
       fall: null,           // 転落中の速度 {vx,vy,t}（操作不能）
       stun: 0,              // 転落後の放心時間(操作不能)
       stunMax: 0,
-      grace: 0,             // 復帰直後の無敵(突かれない)時間
       curSpeed: 0,          // 現在の速度係数(描画の線長に使用)
       moveDir: { x: 0, y: 0 },
       path: [{ x: 0, y: 0, h: terrain.height(0, 0) }],
@@ -335,7 +332,6 @@ export function start(canvas) {
     }
     if (g.state === 'play') {
       g.time += dt;
-      if (g.grace > 0) g.grace -= dt;
       let moved = false;
       g.curSpeed = 0;
       if (g.riding) {
@@ -373,9 +369,8 @@ export function start(canvas) {
         }
         moved = true;
       } else if (g.stun > 0) {
-        // 放心：操作不能でその場に。復帰時に無敵猶予を付与（ハメ防止）
+        // 放心：操作不能でその場に
         g.stun -= dt;
-        if (g.stun <= 0) g.grace = CFG.PUSH_GRACE;
       } else {
         const mv = input.read();
         // 転落判定：急すぎる／急斜面で登っていない なら転がり落ちる
@@ -425,10 +420,9 @@ export function start(canvas) {
       for (const n of g.npcs) {
         const dpx = g.px - n.x, dpy = g.py - n.y;
         const dp = Math.hypot(dpx, dpy);
-        if (n.satT > 0) n.satT -= dt; // 突き落とした後は満足して登りに専念
-        // 視線：自分より3等高線以上高い地形に遮られると見えない（満足中は追わない）
+        // 視線：自分より3等高線以上高い地形に遮られると見えない
         let sees = false;
-        if (n.satT <= 0 && dp < CFG.NPC_AGGRO && dp > 1e-3) {
+        if (dp < CFG.NPC_AGGRO && dp > 1e-3) {
           const thr = g.terrain.height(n.x, n.y) + CFG.NPC_VISION_CONTOURS * CFG.CONTOUR_STEP;
           const ux = dpx / dp, uy = dpy / dp, lim = dp * 0.85;
           sees = true;
@@ -453,11 +447,10 @@ export function start(canvas) {
         if (dp < CFG.NPC_PUSH_R && !g.fall && g.stun <= 0) {
           if (g.curSpeed > CFG.PLAYER_CHARGE) {
             n.dead = true; // やっつけた
-          } else if (g.grace <= 0 && n.satT <= 0) {
+          } else {
             const ux = dpx / (dp || 1), uy = dpy / (dp || 1);
             g.fall = { vx: ux * CFG.NPC_PUSH_SPEED, vy: uy * CFG.NPC_PUSH_SPEED, t: 0 };
             n.x -= ux * 30; n.y -= uy * 30;
-            n.satT = CFG.NPC_SATISFIED; n.chaseT = 0; // 満足して登りに戻る
           }
         }
       }
