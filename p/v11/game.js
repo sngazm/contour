@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, rrim } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, rrim } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -26,7 +26,6 @@ const CFG = {
   GLOVE_MAX: 1.12,        // グローブ装備時の最高速度(下りが軽快でなくなる=不便)
   ZIP_SPEED: 300,         // ジップライン移動の等速(ワールド単位/秒)
   ZIP_ARRIVE: 6,          // 到着判定の距離
-  SLOPE_AVG_DIST: 45,     // 速度を決める傾斜の平均距離(進行方向の±これ)
 };
 
 const ITEM_TYPES = ['glove', 'goggle', 'zip'];
@@ -306,11 +305,8 @@ export function start(canvas) {
       } else {
         const mv = input.read();
         if (mv.mag > 0) {
-          // 進行方向の±一定距離の平均勾配（瞬間の凹凸でガタつかせない）
-          const D = CFG.SLOPE_AVG_DIST;
-          const hA = g.terrain.height(g.px + mv.x * D, g.py + mv.y * D);
-          const hB = g.terrain.height(g.px - mv.x * D, g.py - mv.y * D);
-          const along = (hA - hB) / (2 * D); // +で登り
+          g.terrain.gradient(g.px, g.py, grad);
+          const along = grad.x * mv.x + grad.y * mv.y; // +で登り
           const k = g.items.glove ? CFG.UPHILL_K * CFG.GLOVE_K_MUL : CFG.UPHILL_K;
           const minF = g.items.glove ? CFG.GLOVE_MIN : CFG.SPEED_MIN;
           const maxF = g.items.glove ? CFG.GLOVE_MAX : CFG.SPEED_MAX; // 装備時は下りが軽快でない
