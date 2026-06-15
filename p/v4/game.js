@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -91,24 +91,6 @@ export function start(canvas) {
   let game;
   let endDrag = null; // リザルトでの orbit/タップ判定
 
-  // 右下のビュー切替ボタン（拡大/縮小アイコンを切替）
-  const viewBtn = document.getElementById('viewbtn');
-  const ICON_EXPAND = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H4v4M16 3h4v4M8 21H4v-4M16 21h4v-4"/></svg>';
-  const ICON_CONTRACT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h4V4M20 8h-4V4M4 16h4v4M20 16h-4v4"/></svg>';
-  function setFar(v) {
-    game.far = v;
-    if (viewBtn) {
-      viewBtn.classList.toggle('far', v);
-      viewBtn.innerHTML = v ? ICON_CONTRACT : ICON_EXPAND;
-    }
-  }
-  if (viewBtn) {
-    viewBtn.innerHTML = ICON_EXPAND;
-    viewBtn.addEventListener('click', () => {
-      if (game.state === 'ready' || game.state === 'play') setFar(!game.far);
-    });
-  }
-
   function newGame() {
     const seed = (Math.random() * 1e9) >>> 0;
     const terrain = makeTerrain(seed);
@@ -117,17 +99,15 @@ export function start(canvas) {
       field: { r: CFG.FIELD_R, max: findFieldMax(terrain, CFG.FIELD_R) },
       state: 'ready',
       time: 0,
-      far: false,                   // ビュー段階: false=通常 / true=最大引き
-      viewR: CFG.VIEW_RADIUS_WORLD, // 現在の視界半径(段階へ向けて補間)
+      viewR: CFG.VIEW_RADIUS_WORLD, // 現在の視界半径(ピンチで変化)
       px: 0, py: 0,
       path: [{ x: 0, y: 0, h: terrain.height(0, 0) }],
       readyPulse: 0,
       end: null,
     };
     input.state.everPressed = false;
-    input.state.zoomReq = 0;
+    input.state.pinch = 1;
     endDrag = null;
-    if (viewBtn) { viewBtn.classList.remove('far'); viewBtn.innerHTML = ICON_EXPAND; viewBtn.style.display = ''; }
   }
   newGame();
 
@@ -158,11 +138,8 @@ export function start(canvas) {
   function update(dt) {
     const g = game;
     if (g.state === 'ready' || g.state === 'play') {
-      const zr = input.consumeZoomReq();
-      if (zr > 0) setFar(false);
-      else if (zr < 0) setFar(true);
-      const target = g.far ? CFG.ZOOM_MAX_R : CFG.VIEW_RADIUS_WORLD;
-      g.viewR += (target - g.viewR) * Math.min(1, dt * 10); // 段階間を素早く補間
+      const pz = input.consumePinch();
+      if (pz !== 1) g.viewR = clamp(g.viewR * pz, CFG.VIEW_RADIUS_WORLD, CFG.ZOOM_MAX_R);
     }
     if (g.state === 'ready') {
       g.readyPulse += dt;
@@ -255,7 +232,6 @@ export function start(canvas) {
     };
     g.state = 'end';
     endDrag = null;
-    if (viewBtn) viewBtn.style.display = 'none';
   }
 
   // 高度の数値表示（▲=フィールド最高 / ●=現在地）。常時表示。
@@ -382,35 +358,6 @@ export function start(canvas) {
       drawContours();
     }
 
-    // 最高地点が視界に入っていれば、その場所にマークを出す
-    const pk = g.field.max;
-    const ddx = pk.x - g.px, ddy = pk.y - g.py;
-    const pdist = Math.hypot(ddx, ddy);
-    const pThresh = g.terrain.height(g.px, g.py) + CFG.LOS_CONTOURS * CFG.CONTOUR_STEP;
-    const losClear = (d) => {
-      const limit = d * 0.88;
-      if (limit <= ALWAYS) return true;
-      const ux = ddx / d, uy = ddy / d;
-      for (let k = 1; k <= 36; k++) {
-        const r = ALWAYS + (limit - ALWAYS) * (k / 36);
-        if (g.terrain.height(g.px + ux * r, g.py + uy * r) > pThresh) return false;
-      }
-      return true;
-    };
-    const peakVisible = pdist < VR && (!occlude || losClear(pdist));
-    if (peakVisible) {
-      const sxp = cx + ddx * ppu, syp = cy + ddy * ppu;
-      const pp = ((g.time + g.readyPulse) % 1.2) / 1.2;
-      ctx.strokeStyle = `rgba(200,146,10,${0.7 * (1 - pp)})`;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(sxp, syp, 5 + pp * 16, 0, TAU);
-      ctx.stroke();
-      ctx.fillStyle = COL.peak;
-      drawTriangle(sxp, syp - 3, 7);
-      ctx.fill();
-    }
-
     // ふちを軽く沈めてレンズ感を出す
     const vg = ctx.createRadialGradient(cx, cy, R * 0.6, cx, cy, R);
     vg.addColorStop(0, 'rgba(120,116,104,0)');
@@ -425,18 +372,6 @@ export function start(canvas) {
     ctx.beginPath();
     ctx.arc(cx, cy, R, 0, TAU);
     ctx.stroke();
-
-    // 最高地点の方角をリング上に表示（常時＝コンパス）
-    if (pdist > 1) {
-      const bearing = Math.atan2(ddy, ddx);
-      ctx.save();
-      ctx.translate(cx + Math.cos(bearing) * R, cy + Math.sin(bearing) * R);
-      ctx.rotate(bearing + Math.PI / 2);
-      ctx.fillStyle = COL.peak;
-      drawTriangle(0, 0, 8);
-      ctx.fill();
-      ctx.restore();
-    }
 
     // 残り時間リング
     if (g.state === 'play') {

@@ -12,13 +12,12 @@ export function createInput(target) {
     mag: 0,
     keys: new Set(),
     everPressed: false,
-    zoomReq: 0, // +1=ズームイン(通常) / -1=ズームアウト(最大引き) / 0=なし
+    pinch: 1, // 前回 consume 以降のズーム倍率(>1で拡大=遠くが見える)
   };
 
   const pointers = new Map(); // pointerId -> {x,y}
   let joyId = null;
-  let pinchStart = 0;
-  let pinchFired = false;
+  let pinchLast = 0;
 
   const rel = (e) => {
     const r = target.getBoundingClientRect();
@@ -55,8 +54,7 @@ export function createInput(target) {
     if (pointers.size >= 2) {
       // ピンチ開始：スティックは止める
       s.active = false; s.dx = s.dy = s.mag = 0; joyId = null;
-      pinchStart = pinchDist();
-      pinchFired = false;
+      pinchLast = pinchDist();
     } else {
       joyId = e.pointerId;
       s.active = true;
@@ -72,12 +70,9 @@ export function createInput(target) {
     const [x, y] = rel(e);
     pointers.set(e.pointerId, { x, y });
     if (pointers.size >= 2) {
-      // しきいを越えたら一度だけ段階切替を要求（広げる=イン / すぼめる=アウト）
-      if (!pinchFired && pinchStart > 0) {
-        const ratio = pinchDist() / pinchStart;
-        if (ratio > 1.25) { s.zoomReq = 1; pinchFired = true; }
-        else if (ratio < 0.8) { s.zoomReq = -1; pinchFired = true; }
-      }
+      const d = pinchDist();
+      if (pinchLast > 0 && d > 0) s.pinch *= d / pinchLast;
+      pinchLast = d;
     } else if (s.active && e.pointerId === joyId) {
       setFrom(x, y);
     }
@@ -88,7 +83,7 @@ export function createInput(target) {
     if (e.pointerId === joyId) {
       s.active = false; s.dx = s.dy = s.mag = 0; joyId = null;
     }
-    if (pointers.size < 2) { pinchStart = 0; pinchFired = false; }
+    if (pointers.size < 2) pinchLast = 0;
   }
 
   target.addEventListener('pointerdown', down);
@@ -97,10 +92,10 @@ export function createInput(target) {
   target.addEventListener('pointercancel', up);
   target.style.touchAction = 'none';
 
-  // ホイールでズーム段階切替（PC）。上=イン(通常) / 下=アウト(引き)。
+  // ホイールでズーム（PC）。下方向スクロールで縮小=近づく。
   target.addEventListener('wheel', (e) => {
     e.preventDefault();
-    s.zoomReq = e.deltaY < 0 ? 1 : -1;
+    s.pinch *= Math.exp(e.deltaY * 0.0015);
   }, { passive: false });
 
   window.addEventListener('keydown', (e) => {
@@ -125,12 +120,12 @@ export function createInput(target) {
     return { x: 0, y: 0, mag: 0, active: false };
   }
 
-  // ズーム段階の切替要求を取り出してリセット（+1=イン / -1=アウト / 0=なし）
-  function consumeZoomReq() {
-    const z = s.zoomReq;
-    s.zoomReq = 0;
-    return z;
+  // ズーム倍率を取り出してリセット（1.0=変化なし）
+  function consumePinch() {
+    const p = s.pinch;
+    s.pinch = 1;
+    return p;
   }
 
-  return { read, consumeZoomReq, state: s };
+  return { read, consumePinch, state: s };
 }
