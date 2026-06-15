@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -19,15 +19,7 @@ const CFG = {
   SPEED_MAX: 1.7,         // 下りでの上限係数
   PATH_MIN_STEP: 5,       // 軌跡を記録する最小移動距離
   FIELD_R: 1500,          // フィールド(ステージ)の半径。これが最高地点の探索範囲
-  ITEM_COUNT: 6,          // フィールドに撒くアイテム数
-  PICKUP_R: 30,           // アイテム取得の距離
-  GLOVE_K_MUL: 0.34,      // グローブ装備時の登坂ペナルティ倍率
-  GLOVE_MIN: 0.6,         // グローブ装備時の最低速度係数(急崖でも登れる)
-  ZIP_SPEED: 300,         // ジップライン移動の等速(ワールド単位/秒)
-  ZIP_ARRIVE: 6,          // 到着判定の距離
 };
-
-const ITEM_TYPES = ['glove', 'goggle', 'zip'];
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
@@ -42,53 +34,7 @@ const COL = {
   edge: 'rgba(40,39,35,0.5)',
   accent: '#e0512e',    // 軌跡・到達点
   peak: '#c8920a',      // フィールド最高地点
-  item: '#1f8a8a',      // アイテム
 };
-
-// アイテムを撒く（少なくとも各種1つ、残りはランダム。開始地点から離す）
-function spawnItems(R) {
-  const list = [];
-  for (let i = 0; i < CFG.ITEM_COUNT; i++) {
-    const a = Math.random() * TAU;
-    const r = 320 + Math.random() * (R - 380);
-    const type = i < ITEM_TYPES.length ? ITEM_TYPES[i] : ITEM_TYPES[(Math.random() * ITEM_TYPES.length) | 0];
-    list.push({ x: Math.cos(a) * r, y: Math.sin(a) * r, type, taken: false });
-  }
-  return list;
-}
-
-// アイテムのアイコン（中心 x,y / 半径 s）。token=外枠の輪も描く。
-function drawItemGlyph(ctx, x, y, type, s, color) {
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.lineWidth = Math.max(1.4, s * 0.16);
-  ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
-  if (type === 'glove') {
-    // 二段のシェブロン（登る／上へ）
-    for (let k = 0; k < 2; k++) {
-      const o = -s * 0.5 + k * s * 0.55;
-      ctx.beginPath();
-      ctx.moveTo(x - s * 0.5, y + o + s * 0.35);
-      ctx.lineTo(x, y + o - s * 0.1);
-      ctx.lineTo(x + s * 0.5, y + o + s * 0.35);
-      ctx.stroke();
-    }
-  } else if (type === 'goggle') {
-    // 双眼のゴーグル
-    const r = s * 0.34;
-    ctx.beginPath(); ctx.arc(x - r * 1.05, y, r, 0, TAU); ctx.stroke();
-    ctx.beginPath(); ctx.arc(x + r * 1.05, y, r, 0, TAU); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x - r * 0.1, y); ctx.lineTo(x + r * 0.1, y); ctx.stroke();
-  } else {
-    // ジップライン：斜めのワイヤーと滑車
-    ctx.beginPath();
-    ctx.moveTo(x - s * 0.6, y - s * 0.55);
-    ctx.lineTo(x + s * 0.6, y + s * 0.55);
-    ctx.stroke();
-    ctx.beginPath(); ctx.arc(x, y, s * 0.26, 0, TAU); ctx.fill();
-  }
-}
 
 // フィールド内の最高地点を探す（粗いグリッド → 勾配上昇で微調整）
 function findFieldMax(terrain, R) {
@@ -174,9 +120,6 @@ export function start(canvas) {
       far: false,                   // ビュー段階: false=通常 / true=最大引き
       viewR: CFG.VIEW_RADIUS_WORLD, // 現在の視界半径(段階へ向けて補間)
       px: 0, py: 0,
-      items: { glove: false, goggle: false, zip: false },
-      pickups: spawnItems(CFG.FIELD_R),
-      riding: null,         // ジップライン移動中の目標 {tx,ty}
       path: [{ x: 0, y: 0, h: terrain.height(0, 0) }],
       readyPulse: 0,
       end: null,
@@ -188,51 +131,26 @@ export function start(canvas) {
   }
   newGame();
 
-  // 画面座標→ワールド座標（プレイ中ビュー）
-  function screenToWorld(sx, sy) {
-    const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
-    const R = Math.min(window.innerWidth, window.innerHeight) * 0.46;
-    const ppu = R / game.viewR;
-    return { x: game.px + (sx - cx) / ppu, y: game.py + (sy - cy) / ppu };
-  }
-
-  // リザルト=ドラッグでorbit/タップで再挑戦。プレイ=タップでジップライン（所持時）
-  let tapInfo = null;
+  // リザルトのカメラ操作（ドラッグでorbit、タップで再挑戦）
   canvas.addEventListener('pointerdown', (e) => {
     if (game.state === 'end') endDrag = { x: e.clientX, y: e.clientY, moved: false };
-    else tapInfo = { x: e.clientX, y: e.clientY, t: performance.now(), moved: false };
   });
   canvas.addEventListener('pointermove', (e) => {
-    if (game.state === 'end' && endDrag) {
-      const dx = e.clientX - endDrag.x;
-      const dy = e.clientY - endDrag.y;
-      if (Math.abs(dx) + Math.abs(dy) > 6) endDrag.moved = true;
-      const cam = game.end.cam;
-      cam.yaw += dx * 0.006;
-      cam.tiltOff = clamp(cam.tiltOff - dy * 0.004, -0.45, 0.5);
-      cam.touched = true;
-      endDrag.x = e.clientX;
-      endDrag.y = e.clientY;
-    } else if (tapInfo) {
-      if (Math.hypot(e.clientX - tapInfo.x, e.clientY - tapInfo.y) > 8) tapInfo.moved = true;
-    }
+    if (game.state !== 'end' || !endDrag) return;
+    const dx = e.clientX - endDrag.x;
+    const dy = e.clientY - endDrag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 6) endDrag.moved = true;
+    const cam = game.end.cam;
+    cam.yaw += dx * 0.006;
+    cam.tiltOff = clamp(cam.tiltOff - dy * 0.004, -0.45, 0.5);
+    cam.touched = true;
+    endDrag.x = e.clientX;
+    endDrag.y = e.clientY;
   });
   window.addEventListener('pointerup', () => {
     if (game.state === 'end' && endDrag) {
       if (!endDrag.moved && game.end.t > 2.2) newGame();
       endDrag = null;
-    } else if (tapInfo) {
-      // 動かさない短いタップ＝ジップライン展開（所持時）
-      if (game.state === 'play' && game.items.zip && !tapInfo.moved &&
-          performance.now() - tapInfo.t < 350) {
-        const r = canvas.getBoundingClientRect();
-        const w = screenToWorld(tapInfo.x - r.left, tapInfo.y - r.top);
-        let tx = w.x, ty = w.y;
-        const td = Math.hypot(tx, ty); // 目標はフィールド内にクランプ
-        if (td > game.field.r) { tx *= game.field.r / td; ty *= game.field.r / td; }
-        game.riding = { tx, ty };
-      }
-      tapInfo = null;
     }
   });
 
@@ -253,42 +171,19 @@ export function start(canvas) {
     }
     if (g.state === 'play') {
       g.time += dt;
-      let moved = false;
-      if (g.riding) {
-        // ジップライン：等速で目標へ（地形を無視）
-        const dx = g.riding.tx - g.px, dy = g.riding.ty - g.py;
-        const d = Math.hypot(dx, dy);
-        const step = CFG.ZIP_SPEED * dt;
-        if (d <= CFG.ZIP_ARRIVE || d <= step) { g.px = g.riding.tx; g.py = g.riding.ty; g.riding = null; }
-        else { g.px += (dx / d) * step; g.py += (dy / d) * step; }
-        moved = true;
-      } else {
-        const mv = input.read();
-        if (mv.mag > 0) {
-          g.terrain.gradient(g.px, g.py, grad);
-          const along = grad.x * mv.x + grad.y * mv.y; // +で登り
-          const k = g.items.glove ? CFG.UPHILL_K * CFG.GLOVE_K_MUL : CFG.UPHILL_K;
-          const minF = g.items.glove ? CFG.GLOVE_MIN : CFG.SPEED_MIN;
-          const f = clamp(1 - along * k, minF, CFG.SPEED_MAX);
-          const sp = CFG.BASE_SPEED * f * mv.mag * dt;
-          g.px += mv.x * sp;
-          g.py += mv.y * sp;
-          moved = true;
-        }
-      }
-      if (moved) {
+      const mv = input.read();
+      if (mv.mag > 0) {
+        g.terrain.gradient(g.px, g.py, grad);
+        const along = grad.x * mv.x + grad.y * mv.y; // +で登り
+        const f = clamp(1 - along * CFG.UPHILL_K, CFG.SPEED_MIN, CFG.SPEED_MAX);
+        const sp = CFG.BASE_SPEED * f * mv.mag * dt;
+        g.px += mv.x * sp;
+        g.py += mv.y * sp;
         const d = Math.hypot(g.px, g.py); // フィールド外には出られない
         if (d > g.field.r) { g.px *= g.field.r / d; g.py *= g.field.r / d; }
         const last = g.path[g.path.length - 1];
         if (Math.hypot(g.px - last.x, g.py - last.y) >= CFG.PATH_MIN_STEP) {
           g.path.push({ x: g.px, y: g.py, h: g.terrain.height(g.px, g.py) });
-        }
-        // アイテム取得
-        for (const it of g.pickups) {
-          if (!it.taken && Math.hypot(g.px - it.x, g.py - it.y) < CFG.PICKUP_R) {
-            it.taken = true;
-            g.items[it.type] = true;
-          }
         }
       }
       if (g.time >= CFG.DURATION) beginEnd();
@@ -487,70 +382,29 @@ export function start(canvas) {
       drawContours();
     }
 
-    // ある地点が今の視界で見えているか（視界半径内＋視線が通る）
+    // 最高地点が視界に入っていれば、その場所にマークを出す
+    const pk = g.field.max;
+    const ddx = pk.x - g.px, ddy = pk.y - g.py;
+    const pdist = Math.hypot(ddx, ddy);
     const pThresh = g.terrain.height(g.px, g.py) + CFG.LOS_CONTOURS * CFG.CONTOUR_STEP;
-    const visibleAt = (wx, wy) => {
-      const dx = wx - g.px, dy = wy - g.py;
-      const d = Math.hypot(dx, dy);
-      if (d >= VR) return false;
-      if (!occlude) return true;
-      const limit = d * 0.9;
+    const losClear = (d) => {
+      const limit = d * 0.88;
       if (limit <= ALWAYS) return true;
-      const ux = dx / d, uy = dy / d;
-      for (let k = 1; k <= 30; k++) {
-        const r = ALWAYS + (limit - ALWAYS) * (k / 30);
+      const ux = ddx / d, uy = ddy / d;
+      for (let k = 1; k <= 36; k++) {
+        const r = ALWAYS + (limit - ALWAYS) * (k / 36);
         if (g.terrain.height(g.px + ux * r, g.py + uy * r) > pThresh) return false;
       }
       return true;
     };
-    const itemPulse = ((g.time + g.readyPulse) % 1.2) / 1.2;
-
-    // アイテム（未取得・視界内のみ表示）
-    for (const it of g.pickups) {
-      if (it.taken || !visibleAt(it.x, it.y)) continue;
-      const sx = cx + (it.x - g.px) * ppu, sy = cy + (it.y - g.py) * ppu;
-      ctx.strokeStyle = `rgba(31,138,138,${0.5 * (1 - itemPulse)})`;
+    const peakVisible = pdist < VR && (!occlude || losClear(pdist));
+    if (peakVisible) {
+      const sxp = cx + ddx * ppu, syp = cy + ddy * ppu;
+      const pp = ((g.time + g.readyPulse) % 1.2) / 1.2;
+      ctx.strokeStyle = `rgba(200,146,10,${0.7 * (1 - pp)})`;
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(sx, sy, 12 + itemPulse * 10, 0, TAU);
-      ctx.stroke();
-      ctx.fillStyle = 'rgba(247,246,242,0.9)';
-      ctx.beginPath();
-      ctx.arc(sx, sy, 13, 0, TAU);
-      ctx.fill();
-      ctx.strokeStyle = COL.item;
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.arc(sx, sy, 13, 0, TAU);
-      ctx.stroke();
-      drawItemGlyph(ctx, sx, sy, it.type, 9, COL.item);
-    }
-
-    // ジップラインのワイヤー（移動中）
-    if (g.riding) {
-      const tx = cx + (g.riding.tx - g.px) * ppu, ty = cy + (g.riding.ty - g.py) * ppu;
-      ctx.strokeStyle = COL.item;
-      ctx.lineWidth = 2;
-      ctx.setLineDash([2, 4]);
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.lineTo(tx, ty);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = COL.item;
-      ctx.beginPath();
-      ctx.arc(tx, ty, 4, 0, TAU);
-      ctx.fill();
-    }
-
-    // 最高地点：ゴーグル所持時のみ、視界に入っていればマーク
-    const pk = g.field.max;
-    if (g.items.goggle && visibleAt(pk.x, pk.y)) {
-      const sxp = cx + (pk.x - g.px) * ppu, syp = cy + (pk.y - g.py) * ppu;
-      ctx.strokeStyle = `rgba(200,146,10,${0.7 * (1 - itemPulse)})`;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(sxp, syp, 5 + itemPulse * 16, 0, TAU);
+      ctx.arc(sxp, syp, 5 + pp * 16, 0, TAU);
       ctx.stroke();
       ctx.fillStyle = COL.peak;
       drawTriangle(sxp, syp - 3, 7);
@@ -572,19 +426,16 @@ export function start(canvas) {
     ctx.arc(cx, cy, R, 0, TAU);
     ctx.stroke();
 
-    // 最高地点の方角をリング上に表示（ゴーグル所持時のみ＝コンパス）
-    if (g.items.goggle) {
-      const ddx = pk.x - g.px, ddy = pk.y - g.py;
-      if (Math.hypot(ddx, ddy) > 1) {
-        const bearing = Math.atan2(ddy, ddx);
-        ctx.save();
-        ctx.translate(cx + Math.cos(bearing) * R, cy + Math.sin(bearing) * R);
-        ctx.rotate(bearing + Math.PI / 2);
-        ctx.fillStyle = COL.peak;
-        drawTriangle(0, 0, 8);
-        ctx.fill();
-        ctx.restore();
-      }
+    // 最高地点の方角をリング上に表示（常時＝コンパス）
+    if (pdist > 1) {
+      const bearing = Math.atan2(ddy, ddx);
+      ctx.save();
+      ctx.translate(cx + Math.cos(bearing) * R, cy + Math.sin(bearing) * R);
+      ctx.rotate(bearing + Math.PI / 2);
+      ctx.fillStyle = COL.peak;
+      drawTriangle(0, 0, 8);
+      ctx.fill();
+      ctx.restore();
     }
 
     // 残り時間リング
@@ -641,17 +492,6 @@ export function start(canvas) {
     }
 
     drawHud(g.terrain.height(g.px, g.py), g.field.max.h);
-
-    // 所持アビリティを左下に小さく
-    {
-      let n = 0;
-      const bx = 26, by = H - 28;
-      for (const t of ITEM_TYPES) {
-        if (!g.items[t]) continue;
-        drawItemGlyph(ctx, bx + n * 30, by, t, 9, COL.item);
-        n++;
-      }
-    }
 
     // タイトル（ready のときだけ）
     if (g.state === 'ready') {
