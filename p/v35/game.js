@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 60,           // 1ゲームの長さ(秒)
@@ -92,23 +92,6 @@ void main(){
   c = mix(c, c * 0.5, line * 0.5);
   frag = vec4(c, 1.0);
 }`;
-// 経路リボン用（同じ投影＋深度。フラットなアクセント色）
-const VERT_LINE = `#version 300 es
-in vec2 aPos; in float aH;
-uniform vec2 uCam, uYaw, uTilt, uOrigin, uView;
-uniform float uScale, uZ, uDepth;
-void main(){
-  float X = aPos.x - uCam.x, Y = aPos.y - uCam.y;
-  float rx = X*uYaw.x - Y*uYaw.y;
-  float ry = X*uYaw.y + Y*uYaw.x;
-  float Z = aH * uZ;
-  float sx = uOrigin.x + rx*uScale;
-  float sy = uOrigin.y + ry*uScale*uTilt.x - Z*uScale*uTilt.y;
-  gl_Position = vec4(sx/uView.x*2.0 - 1.0, 1.0 - sy/uView.y*2.0, -ry*uDepth, 1.0);
-}`;
-const FRAG_LINE = `#version 300 es
-precision highp float; out vec4 frag; uniform vec4 uColor;
-void main(){ frag = uColor; }`;
 function setupGL(gl) {
   const mk = (type, src) => {
     const s = gl.createShader(type);
@@ -116,34 +99,20 @@ function setupGL(gl) {
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.warn(gl.getShaderInfoLog(s)); return null; }
     return s;
   };
-  const prog = (vsrc, fsrc) => {
-    const vs = mk(gl.VERTEX_SHADER, vsrc), fs = mk(gl.FRAGMENT_SHADER, fsrc);
-    if (!vs || !fs) return null;
-    const p = gl.createProgram();
-    gl.attachShader(p, vs); gl.attachShader(p, fs); gl.linkProgram(p);
-    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.warn(gl.getProgramInfoLog(p)); return null; }
-    return p;
-  };
-  const pTerr = prog(VERT_SRC, FRAG_SRC), pLine = prog(VERT_LINE, FRAG_LINE);
-  if (!pTerr || !pLine) return null;
-  const tf = (n) => gl.getUniformLocation(pTerr, n);
-  const lf = (n) => gl.getUniformLocation(pLine, n);
-  const TUN = ['cam', 'yaw', 'tilt', 'origin', 'view', 'scale', 'z', 'depth'];
-  const xform = (fn) => { const o = {}; for (const n of TUN) o[n] = fn('u' + n[0].toUpperCase() + n.slice(1)); return o; };
+  const vs = mk(gl.VERTEX_SHADER, VERT_SRC), fs = mk(gl.FRAGMENT_SHADER, FRAG_SRC);
+  if (!vs || !fs) return null;
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { console.warn(gl.getProgramInfoLog(prog)); return null; }
+  const U = (n) => gl.getUniformLocation(prog, n);
   return {
-    vbo: gl.createBuffer(), ibo: gl.createBuffer(), pbo: gl.createBuffer(),
-    terr: {
-      prog: pTerr,
-      aPos: gl.getAttribLocation(pTerr, 'aPos'), aH: gl.getAttribLocation(pTerr, 'aH'), aRV: gl.getAttribLocation(pTerr, 'aRV'),
-      u: Object.assign(xform(tf), {
-        c0: tf('uC0'), c1: tf('uC1'), c2: tf('uC2'), c3: tf('uC3'), th: tf('uTH'),
-        shadeLo: tf('uShadeLo'), shadeHi: tf('uShadeHi'), rvScale: tf('uRvScale'), step: tf('uStep'),
-      }),
-    },
-    line: {
-      prog: pLine,
-      aPos: gl.getAttribLocation(pLine, 'aPos'), aH: gl.getAttribLocation(pLine, 'aH'),
-      u: Object.assign(xform(lf), { color: lf('uColor') }),
+    prog, vbo: gl.createBuffer(), ibo: gl.createBuffer(),
+    aPos: gl.getAttribLocation(prog, 'aPos'), aH: gl.getAttribLocation(prog, 'aH'), aRV: gl.getAttribLocation(prog, 'aRV'),
+    u: {
+      cam: U('uCam'), yaw: U('uYaw'), tilt: U('uTilt'), origin: U('uOrigin'), view: U('uView'),
+      scale: U('uScale'), z: U('uZ'), depth: U('uDepth'),
+      c0: U('uC0'), c1: U('uC1'), c2: U('uC2'), c3: U('uC3'), th: U('uTH'),
+      shadeLo: U('uShadeLo'), shadeHi: U('uShadeHi'), rvScale: U('uRvScale'), step: U('uStep'),
     },
   };
 }
@@ -720,7 +689,7 @@ export function start(canvas) {
         h: Float32Array.from(sh), n: sh.length,
       },
       cam: { yaw: 0, yawVel: 0, zoom: 1, tiltOff: 0, touched: false },
-      glCount: 0, glPathCount: 0,
+      glCount: 0,
     };
     // WebGL 用メッシュをアップロード（頂点= worldX,worldY,height,rv / 三角形インデックス）
     if (glR) {
@@ -748,21 +717,6 @@ export function start(canvas) {
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, glR.ibo);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
       g.end.glCount = idx.length;
-
-      // 経路を地面に沿うリボン（帯）として作る → 深度テストで山に隠れる
-      const pts = g.path, hw = 9, bias = 0.006, pv = [];
-      for (let i = 0; i + 1 < pts.length; i++) {
-        const a = pts[i], b = pts[i + 1];
-        let dxp = b.x - a.x, dyp = b.y - a.y;
-        const L = Math.hypot(dxp, dyp) || 1; dxp /= L; dyp /= L;
-        const px = -dyp * hw, py = dxp * hw;
-        const ah = a.h + bias, bh = b.h + bias;
-        pv.push(a.x + px, a.y + py, ah, a.x - px, a.y - py, ah, b.x + px, b.y + py, bh,
-                b.x + px, b.y + py, bh, a.x - px, a.y - py, ah, b.x - px, b.y - py, bh);
-      }
-      gl.bindBuffer(gl.ARRAY_BUFFER, glR.pbo);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pv), gl.STATIC_DRAW);
-      g.end.glPathCount = pv.length / 3;
     }
     g.state = 'end';
     endPointers.clear();
@@ -1294,24 +1248,26 @@ export function start(canvas) {
       if (glCanvas.width !== canvas.width || glCanvas.height !== canvas.height) {
         glCanvas.width = canvas.width; glCanvas.height = canvas.height;
       }
-      const T = glR.terr, u = T.u;
-      const setX = (uu) => { // 共有の投影uniform
-        gl.uniform2f(uu.cam, ccx, ccy); gl.uniform2f(uu.yaw, cyaw, syaw); gl.uniform2f(uu.tilt, ct, st);
-        gl.uniform2f(uu.origin, ox, oy); gl.uniform2f(uu.view, W, H);
-        gl.uniform1f(uu.scale, scale); gl.uniform1f(uu.z, HEIGHT_SCALE * EXAG); gl.uniform1f(uu.depth, 1 / (depthHalf * 2.2));
-      };
+      const u = glR.u;
       gl.viewport(0, 0, glCanvas.width, glCanvas.height);
       gl.clearColor(0, 0, 0, 0);
       gl.enable(gl.DEPTH_TEST);
       gl.depthFunc(gl.LEQUAL);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-      gl.useProgram(T.prog);
+      gl.useProgram(glR.prog);
       gl.bindBuffer(gl.ARRAY_BUFFER, glR.vbo);
-      gl.enableVertexAttribArray(T.aPos); gl.vertexAttribPointer(T.aPos, 2, gl.FLOAT, false, 16, 0);
-      gl.enableVertexAttribArray(T.aH); gl.vertexAttribPointer(T.aH, 1, gl.FLOAT, false, 16, 8);
-      gl.enableVertexAttribArray(T.aRV); gl.vertexAttribPointer(T.aRV, 1, gl.FLOAT, false, 16, 12);
+      gl.enableVertexAttribArray(glR.aPos); gl.vertexAttribPointer(glR.aPos, 2, gl.FLOAT, false, 16, 0);
+      gl.enableVertexAttribArray(glR.aH); gl.vertexAttribPointer(glR.aH, 1, gl.FLOAT, false, 16, 8);
+      gl.enableVertexAttribArray(glR.aRV); gl.vertexAttribPointer(glR.aRV, 1, gl.FLOAT, false, 16, 12);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, glR.ibo);
-      setX(u);
+      gl.uniform2f(u.cam, ccx, ccy);
+      gl.uniform2f(u.yaw, cyaw, syaw);
+      gl.uniform2f(u.tilt, ct, st);
+      gl.uniform2f(u.origin, ox, oy);
+      gl.uniform2f(u.view, W, H);
+      gl.uniform1f(u.scale, scale);
+      gl.uniform1f(u.z, HEIGHT_SCALE * EXAG);
+      gl.uniform1f(u.depth, 1 / (depthHalf * 2.2));
       gl.uniform3f(u.c0, ALT4[0][0] / 255, ALT4[0][1] / 255, ALT4[0][2] / 255);
       gl.uniform3f(u.c1, ALT4[1][0] / 255, ALT4[1][1] / 255, ALT4[1][2] / 255);
       gl.uniform3f(u.c2, ALT4[2][0] / 255, ALT4[2][1] / 255, ALT4[2][2] / 255);
@@ -1322,20 +1278,6 @@ export function start(canvas) {
       gl.uniform1f(u.rvScale, e.rvScale);
       gl.uniform1f(u.step, CFG.CONTOUR_STEP);
       gl.drawElements(gl.TRIANGLES, e.glCount, gl.UNSIGNED_SHORT, 0);
-
-      // 経路リボン（同じ深度バッファに描く→山に隠れる）
-      if (e.glPathCount > 0) {
-        const Ln = glR.line;
-        gl.useProgram(Ln.prog);
-        gl.bindBuffer(gl.ARRAY_BUFFER, glR.pbo);
-        gl.enableVertexAttribArray(Ln.aPos); gl.vertexAttribPointer(Ln.aPos, 2, gl.FLOAT, false, 12, 0);
-        gl.enableVertexAttribArray(Ln.aH); gl.vertexAttribPointer(Ln.aH, 1, gl.FLOAT, false, 12, 8);
-        setX(Ln.u);
-        gl.uniform4f(Ln.u.color, 0.88, 0.32, 0.18, 1.0); // アクセント
-        gl.depthMask(false);
-        gl.drawArrays(gl.TRIANGLES, 0, e.glPathCount);
-        gl.depthMask(true);
-      }
     }
 
     // イントロ序盤は円窓が開いていくように見せる
@@ -1415,19 +1357,17 @@ export function start(canvas) {
       ctx.globalCompositeOperation = 'source-over';
     }
 
-    // 軌跡（GL不可時のみ2Dで。GL使用時は深度付きリボンで描画済み）
-    if (!useGL) {
-      ctx.strokeStyle = COL.accent;
-      ctx.lineWidth = 2.6;
-      ctx.beginPath();
-      for (let i = 0; i < g.path.length; i++) {
-        const p = g.path[i];
-        const pr = project(p.x, p.y, p.h);
-        if (i === 0) ctx.moveTo(pr.sx, pr.sy);
-        else ctx.lineTo(pr.sx, pr.sy);
-      }
-      ctx.stroke();
+    // 軌跡
+    ctx.strokeStyle = COL.accent;
+    ctx.lineWidth = 2.6;
+    ctx.beginPath();
+    for (let i = 0; i < g.path.length; i++) {
+      const p = g.path[i];
+      const pr = project(p.x, p.y, p.h);
+      if (i === 0) ctx.moveTo(pr.sx, pr.sy);
+      else ctx.lineTo(pr.sx, pr.sy);
     }
+    ctx.stroke();
 
     // スタート地点
     const sp = g.path[0];
