@@ -1,11 +1,11 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
-  DURATION: 60,           // 1ゲームの長さ(秒)
+  DURATION: 45,           // 1ゲームの長さ(秒)
   VIEW_RADIUS_WORLD: 235, // 既定(最ズームイン)の視界半径
   ALWAYS_R: 80,           // 常に見える近距離バブル(これより外は視線遮蔽)
   ZOOM_MAX_R: 1500,       // ピンチアウトで見渡せる最大の視界半径
@@ -20,8 +20,7 @@ const CFG = {
   SPEED_MAX: 1.7,         // 下りでの上限係数
   PATH_MIN_STEP: 5,       // 軌跡を記録する最小移動距離
   FIELD_R: 1500,          // フィールド(ステージ)の半径。これが最高地点の探索範囲
-  RADAR_COUNT: 5,         // レーダー（谷に多い）
-  BOON_COUNT: 4,          // ボーナス地点（尾根・高所に多い）
+  ITEM_COUNT: 6,          // フィールドに撒くアイテム数
   PICKUP_R: 30,           // アイテム取得の距離
   GLOVE_K_MUL: 0.34,      // グローブ装備時の登坂ペナルティ倍率
   GLOVE_MIN: 0.6,         // グローブ装備時の最低速度係数(急崖でも登れる)
@@ -49,10 +48,11 @@ const CFG = {
   NPC_DOWN: 6,            // 撃破されたNPCの放心秒数(消えずに復帰)
 };
 
+const ITEM_TYPES = ['radar']; // アイテムはレーダーのみ
 const RV_BLUR = 12; // 尾根谷度の近傍半径(セル数。広いほどマダラが減る)
 // 高度カラー(4色): 下から 青→緑→黄土→白。しきいは高さ0..1。
 const ALT4 = [[58, 108, 162], [104, 156, 86], [184, 150, 78], [240, 238, 230]];
-const ALT_TH = [0.15, 0.24, 0.35];
+const ALT_TH = [0.18, 0.40, 0.62];
 const SHADE_LO = 0.68; // 谷の暗さ
 const SHADE_HI = 1.16; // 尾根の明るさ
 
@@ -101,31 +101,18 @@ const COL = {
   edge: 'rgba(40,39,35,0.5)',
   accent: '#e0512e',    // 軌跡・到達点
   peak: '#c8920a',      // フィールド最高地点
-  item: '#1f8a8a',      // レーダー
-  boon: '#d59a12',      // ボーナス地点
+  item: '#1f8a8a',      // アイテム
 };
 
-// 散布。レーダーは谷(尾根谷度↓)、ボーナスは尾根・高所(尾根谷度↑)に寄せる。
-function spawnPickups(terrain, R) {
+// アイテムを撒く（少なくとも各種1つ、残りはランダム。開始地点から離す）
+function spawnItems(R) {
   const list = [];
-  const rvAt = (x, y) => {
-    const h = terrain.height(x, y);
-    let s = 0;
-    s += terrain.height(x + 120, y) + terrain.height(x - 120, y) + terrain.height(x, y + 120) + terrain.height(x, y - 120);
-    return h - s / 4; // 谷で負, 尾根で正
-  };
-  const place = (type, valley) => {
-    let best = null, bestScore = valley ? Infinity : -Infinity;
-    for (let k = 0; k < 12; k++) {
-      const a = Math.random() * TAU, rr = 240 + Math.random() * (R - 300);
-      const x = Math.cos(a) * rr, y = Math.sin(a) * rr;
-      const s = rvAt(x, y);
-      if (valley ? s < bestScore : s > bestScore) { bestScore = s; best = { x, y }; }
-    }
-    list.push({ x: best.x, y: best.y, type, taken: false });
-  };
-  for (let i = 0; i < CFG.RADAR_COUNT; i++) place('radar', true);
-  for (let i = 0; i < CFG.BOON_COUNT; i++) place('boon', false);
+  for (let i = 0; i < CFG.ITEM_COUNT; i++) {
+    const a = Math.random() * TAU;
+    const r = 320 + Math.random() * (R - 380);
+    const type = i < ITEM_TYPES.length ? ITEM_TYPES[i] : ITEM_TYPES[(Math.random() * ITEM_TYPES.length) | 0];
+    list.push({ x: Math.cos(a) * r, y: Math.sin(a) * r, type, taken: false });
+  }
   return list;
 }
 
@@ -142,14 +129,6 @@ function drawItemGlyph(ctx, x, y, type, s, color) {
     ctx.beginPath(); ctx.arc(x, y, s * 0.45, 0, TAU); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + s * 0.85, y - s * 0.5); ctx.stroke();
     ctx.beginPath(); ctx.arc(x, y, s * 0.16, 0, TAU); ctx.fill();
-  } else if (type === 'boon') {
-    // 4方向に尖った星
-    ctx.beginPath();
-    ctx.moveTo(x, y - s); ctx.lineTo(x + s * 0.28, y - s * 0.28);
-    ctx.lineTo(x + s, y); ctx.lineTo(x + s * 0.28, y + s * 0.28);
-    ctx.lineTo(x, y + s); ctx.lineTo(x - s * 0.28, y + s * 0.28);
-    ctx.lineTo(x - s, y); ctx.lineTo(x - s * 0.28, y - s * 0.28);
-    ctx.closePath(); ctx.fill();
   } else if (type === 'glove') {
     // 二段のシェブロン（登る／上へ）
     for (let k = 0; k < 2; k++) {
@@ -232,9 +211,6 @@ export function start(canvas) {
   const grad = { x: 0, y: 0 };
   const shadeCanvas = document.createElement('canvas'); // 段彩/立体図用オフスクリーン
   const shadeCtx = shadeCanvas.getContext('2d');
-  const fillPX = new Float32Array(120 * 120); // リザルト塗りの頂点投影バッファ
-  const fillPY = new Float32Array(120 * 120);
-  const fillPD = new Float32Array(120 * 120);
 
   let game;
   let endDrag = null; // リザルトでの orbit/タップ判定
@@ -264,9 +240,7 @@ export function start(canvas) {
       best: terrain.height(0, 0), // 到達した最高高度（自己記録＝スコア）
       flash: 0,                   // 記録更新の演出タイマー
       radar: 0,             // レーダー所持数(1回ぶんのズームアウト)
-      bonus: 0,             // 到達したボーナス地点の数（別軸の達成）
-      boonFlash: 0,         // ボーナス取得の演出
-      pickups: spawnPickups(terrain, CFG.FIELD_R),
+      pickups: spawnItems(CFG.FIELD_R),
       npcs: spawnNpcs(CFG.FIELD_R),
       riding: null,         // ジップライン移動中の目標 {tx,ty}
       fall: null,           // 転落中の速度 {vx,vy,t}（操作不能）
@@ -352,7 +326,6 @@ export function start(canvas) {
       const hNow = g.terrain.height(g.px, g.py);
       if (hNow > g.best) { g.best = hNow; g.flash = 0.7; } // 自己記録更新＝達成
       if (g.flash > 0) g.flash -= dt;
-      if (g.boonFlash > 0) g.boonFlash -= dt;
       if (g.grace > 0) g.grace -= dt;
       let moved = false;
       g.curSpeed = 0;
@@ -431,7 +404,6 @@ export function start(canvas) {
           if (!it.taken && Math.hypot(g.px - it.x, g.py - it.y) < CFG.PICKUP_R) {
             it.taken = true;
             if (it.type === 'radar') g.radar += 1;
-            else if (it.type === 'boon') { g.bonus += 1; g.boonFlash = 0.8; }
           }
         }
       }
@@ -584,18 +556,10 @@ export function start(canvas) {
       });
     }
 
-    // 尾根谷度（塗りの陰影用）
-    const rv = new Float32Array(CX * RY);
-    const tA = new Float32Array(CX * RY), tB = new Float32Array(CX * RY);
-    boxBlur(heights, CX, RY, 6, tA, tB);
-    let rvMax = 1e-4;
-    for (let k = 0; k < CX * RY; k++) { const d = heights[k] - tB[k]; rv[k] = d; const a = d < 0 ? -d : d; if (a > rvMax) rvMax = a; }
-
     g.end = {
       t: 0,
       region: { cx, cy, half },
       gmin, gmax,
-      heights, CX, RY, rv, rvScale: 0.5 / Math.max(rvMax, 0.02),
       seg: {
         x0: Float32Array.from(sx0), y0: Float32Array.from(sy0),
         x1: Float32Array.from(sx1), y1: Float32Array.from(sy1),
@@ -608,11 +572,12 @@ export function start(canvas) {
     if (viewBtn) viewBtn.style.display = 'none';
   }
 
-  // 数値表示（★=自己記録 / ▲=目標 / ●=現在地 / ✦=ボーナス）。常時表示。
-  function drawHud(playerH, maxH, best, flash, bonus) {
+  // 数値表示（★=自己記録＝スコア / ▲=フィールド最高＝目標 / ●=現在地）。常時表示。
+  function drawHud(playerH, maxH, best, flash) {
     const top = 26;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    // 記録（追いかける数字。更新直後は大きく光る）
     const pop = flash > 0 ? 1 + 0.5 * (flash / 0.7) : 1;
     ctx.font = `700 ${Math.round(20 * pop)}px ui-monospace, "SF Mono", Menlo, monospace`;
     ctx.fillStyle = flash > 0 ? COL.accent : '#26251f';
@@ -622,44 +587,6 @@ export function start(canvas) {
     ctx.fillText('▲ ' + altOf(maxH), W / 2, top + 24);
     ctx.fillStyle = 'rgba(40,39,35,0.5)';
     ctx.fillText('● ' + altOf(playerH), W / 2, top + 44);
-    if (bonus > 0) {
-      ctx.fillStyle = COL.boon;
-      ctx.fillText('✦ ' + bonus, W / 2, top + 64);
-    }
-  }
-
-  // 左端の縦型・高度計（4色の段彩スケール＋現在地/記録/目標のマーカー）
-  function drawAltMeter(curH, best, maxH) {
-    const x = 16, w = 9;
-    const y0 = H * 0.7, y1 = H * 0.28; // 下=0, 上=高
-    const at = (a) => y0 + (y1 - y0) * clamp(a, 0, 1);
-    const grad = ctx.createLinearGradient(0, y0, 0, y1);
-    grad.addColorStop(0, rgba(ALT4[0]));
-    grad.addColorStop(ALT_TH[0], rgba(ALT4[0]));
-    grad.addColorStop(ALT_TH[0], rgba(ALT4[1]));
-    grad.addColorStop(ALT_TH[1], rgba(ALT4[1]));
-    grad.addColorStop(ALT_TH[1], rgba(ALT4[2]));
-    grad.addColorStop(ALT_TH[2], rgba(ALT4[2]));
-    grad.addColorStop(ALT_TH[2], rgba(ALT4[3]));
-    grad.addColorStop(1, rgba(ALT4[3]));
-    ctx.fillStyle = grad;
-    ctx.fillRect(x, y1, w, y0 - y1);
-    ctx.strokeStyle = 'rgba(40,39,35,0.35)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x, y1, w, y0 - y1);
-    // 目標(▲) と 記録(★)
-    ctx.fillStyle = COL.peak;
-    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.font = '600 11px ui-monospace, Menlo, monospace';
-    ctx.fillText('▲', x + w + 3, at(maxH));
-    ctx.fillStyle = '#26251f';
-    ctx.fillText('★', x + w + 3, at(best));
-    // 現在地マーカー（右向き三角）
-    const yc = at(curH);
-    ctx.fillStyle = '#26251f';
-    ctx.beginPath();
-    ctx.moveTo(x - 3, yc); ctx.lineTo(x - 11, yc - 5); ctx.lineTo(x - 11, yc + 5);
-    ctx.closePath(); ctx.fill();
   }
 
   function drawTriangle(x, y, s) {
@@ -840,13 +767,11 @@ export function start(canvas) {
     };
     const itemPulse = ((g.time + g.readyPulse) % 1.2) / 1.2;
 
-    // アイテム（未取得・視界内のみ表示）。レーダー=青緑 / ボーナス=金
+    // アイテム（未取得・視界内のみ表示）
     for (const it of g.pickups) {
       if (it.taken || !visibleAt(it.x, it.y)) continue;
       const sx = wsx(it.x), sy = wsy(it.y);
-      const col = it.type === 'boon' ? COL.boon : COL.item;
-      const rgbStr = it.type === 'boon' ? '213,154,18' : '31,138,138';
-      ctx.strokeStyle = `rgba(${rgbStr},${0.5 * (1 - itemPulse)})`;
+      ctx.strokeStyle = `rgba(31,138,138,${0.5 * (1 - itemPulse)})`;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(sx, sy, 12 + itemPulse * 10, 0, TAU);
@@ -855,12 +780,12 @@ export function start(canvas) {
       ctx.beginPath();
       ctx.arc(sx, sy, 13, 0, TAU);
       ctx.fill();
-      ctx.strokeStyle = col;
+      ctx.strokeStyle = COL.item;
       ctx.lineWidth = 1.6;
       ctx.beginPath();
       ctx.arc(sx, sy, 13, 0, TAU);
       ctx.stroke();
-      drawItemGlyph(ctx, sx, sy, it.type, 9, col);
+      drawItemGlyph(ctx, sx, sy, it.type, 9, COL.item);
     }
 
     // NPC（視界内）。プレイヤーを追っている個体はアクセントで警告
@@ -1025,14 +950,6 @@ export function start(canvas) {
       ctx.arc(psx, psy, 10 + fr * 36, 0, TAU);
       ctx.stroke();
     }
-    if (g.boonFlash > 0) {
-      const fr = 1 - g.boonFlash / 0.8;
-      ctx.strokeStyle = `rgba(213,154,18,${0.85 * (1 - fr)})`;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(psx, psy, 10 + fr * 42, 0, TAU);
-      ctx.stroke();
-    }
 
     if (g.state === 'ready') {
       const pr = (g.readyPulse % 1.6) / 1.6;
@@ -1055,8 +972,7 @@ export function start(canvas) {
       ctx.fill();
     }
 
-    drawHud(g.terrain.height(g.px, g.py), g.field.max.h, g.best, g.flash, g.bonus);
-    drawAltMeter(g.terrain.height(g.px, g.py), g.best, g.field.max.h);
+    drawHud(g.terrain.height(g.px, g.py), g.field.max.h, g.best, g.flash);
 
     // レーダー所持数を左下に小さく
     if (g.radar > 0) {
@@ -1133,45 +1049,6 @@ export function start(canvas) {
       ctx.beginPath();
       ctx.arc(W / 2, H / 2, maskR, 0, TAU);
       ctx.clip();
-    }
-
-    // 地形を高度カラー＋尾根谷度の陰影で塗る（奥行きソートした面で）
-    {
-      const H4 = e.heights, CXr = e.CX, RYr = e.RY, rvg = e.rv, rvs = e.rvScale;
-      for (let r = 0; r < RYr; r++) {
-        const wy = cy - half + (2 * half) * (r / (RYr - 1));
-        for (let c = 0; c < CXr; c++) {
-          const kk = r * CXr + c;
-          const p = project(cx - half + (2 * half) * (c / (CXr - 1)), wy, H4[kk]);
-          fillPX[kk] = p.sx; fillPY[kk] = p.sy; fillPD[kk] = p.ry;
-        }
-      }
-      const S = 2;
-      const cells = [];
-      for (let r = 0; r + S < RYr; r += S) {
-        for (let c = 0; c + S < CXr; c += S) {
-          const k = r * CXr + c;
-          cells.push([(fillPD[k] + fillPD[k + S] + fillPD[(r + S) * CXr + c] + fillPD[(r + S) * CXr + c + S]) * 0.25, r, c]);
-        }
-      }
-      cells.sort((a, b) => a[0] - b[0]); // 奥（ry小）から手前へ
-      const mh = (S / 2) | 0;
-      for (let ci = 0; ci < cells.length; ci++) {
-        const r = cells[ci][1], c = cells[ci][2];
-        const k00 = r * CXr + c, k10 = r * CXr + c + S, k11 = (r + S) * CXr + c + S, k01 = (r + S) * CXr + c;
-        const mk = (r + mh) * CXr + (c + mh);
-        const hm = H4[mk];
-        const col = hm < ALT_TH[0] ? ALT4[0] : hm < ALT_TH[1] ? ALT4[1] : hm < ALT_TH[2] ? ALT4[2] : ALT4[3];
-        const shade = SHADE_LO + (SHADE_HI - SHADE_LO) * clamp(0.5 + rvg[mk] * rvs, 0, 1);
-        ctx.fillStyle = `rgb(${Math.min(255, col[0] * shade) | 0},${Math.min(255, col[1] * shade) | 0},${Math.min(255, col[2] * shade) | 0})`;
-        ctx.beginPath();
-        ctx.moveTo(fillPX[k00], fillPY[k00]);
-        ctx.lineTo(fillPX[k10], fillPY[k10]);
-        ctx.lineTo(fillPX[k11], fillPY[k11]);
-        ctx.lineTo(fillPX[k01], fillPY[k01]);
-        ctx.closePath();
-        ctx.fill();
-      }
     }
 
     // 等高線を奥行きで濃淡分け（multiplyで前後の見え方を出す）
@@ -1261,14 +1138,9 @@ export function start(canvas) {
     ctx.textBaseline = 'middle';
     ctx.font = `700 ${Math.min(W, H) * 0.13}px ui-monospace, "SF Mono", Menlo, monospace`;
     ctx.fillStyle = 'rgba(38,37,31,0.9)';
-    ctx.fillText('★ ' + altOf(g.best), W / 2, H * 0.17);
-    if (g.bonus > 0) {
-      ctx.font = `700 ${Math.min(W, H) * 0.05}px ui-monospace, "SF Mono", Menlo, monospace`;
-      ctx.fillStyle = COL.boon;
-      ctx.fillText('✦ ' + g.bonus, W / 2, H * 0.17 + Math.min(W, H) * 0.1);
-    }
+    ctx.fillText('★ ' + altOf(g.best), W / 2, H * 0.19);
 
-    drawHud(ep.h, g.field.max.h, g.best, 0, g.bonus);
+    drawHud(ep.h, g.field.max.h, g.best, 0);
 
     // 再挑戦を促す微かなパルス（イントロ後・言葉なし）
     if (e.t > 2.2) {
