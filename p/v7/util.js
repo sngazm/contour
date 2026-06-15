@@ -49,32 +49,3 @@ export function elevColor(h) {
 }
 
 export const rgba = (c, a = 1) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
-
-// 段彩パレット（地図風の塗り分け）。h:0..1 → 青→緑→茶→白。
-const HYPSO = [
-  [0.00, [54, 108, 158]],   // 低地（青）
-  [0.20, [86, 150, 132]],   // 青緑
-  [0.36, [108, 160, 88]],   // 緑
-  [0.50, [168, 170, 98]],   // 黄緑〜カーキ
-  [0.64, [156, 112, 66]],   // 茶
-  [0.80, [120, 82, 52]],    // 濃い茶
-  [0.92, [214, 205, 188]],  // 淡色
-  [1.00, [248, 246, 240]],  // 頂（白）
-];
-
-export function hypso(h) {
-  const t = clamp(h, 0, 1);
-  for (let i = 1; i < HYPSO.length; i++) {
-    if (t <= HYPSO[i][0]) {
-      const [t0, c0] = HYPSO[i - 1];
-      const [t1, c1] = HYPSO[i];
-      const k = (t - t0) / (t1 - t0 || 1);
-      return [
-        Math.round(lerp(c0[0], c1[0], k)),
-        Math.round(lerp(c0[1], c1[1], k)),
-        Math.round(lerp(c0[2], c1[2], k)),
-      ];
-    }
-  }
-  return HYPSO[HYPSO.length - 1][1];
-}

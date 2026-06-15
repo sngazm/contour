@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, hypso } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -26,6 +26,7 @@ const CFG = {
   GLOVE_MAX: 1.12,        // グローブ装備時の最高速度(下りが軽快でなくなる=不便)
   ZIP_SPEED: 300,         // ジップライン移動の等速(ワールド単位/秒)
   ZIP_ARRIVE: 6,          // 到着判定の距離
+  HILLSHADE: 220,         // 陰影の強さ(0で無効)
 };
 
 const ITEM_TYPES = ['glove', 'goggle', 'zip'];
@@ -427,36 +428,29 @@ export function start(canvas) {
     const sxOf = (gx) => cx + (ox0 + gx * CELL - g.px) * ppu;
     const syOf = (gy) => cy + (oy0 + gy * CELL - g.py) * ppu;
 
-    // 段彩（標高で塗り分けるベタ塗り。青→緑→茶→白。等高線の境界に一致）
-    const drawTint = () => {
-      const M = clamp(Math.round(2 * R), 96, 340);
-      shadeCanvas.width = M; shadeCanvas.height = M;
-      const img = shadeCtx.createImageData(M, M);
+    // 陰影（北西からの光で起伏を立体的に。等高線は単色のまま）
+    const drawShade = () => {
+      if (!CFG.HILLSHADE) return;
+      shadeCanvas.width = nx; shadeCanvas.height = ny;
+      const img = shadeCtx.createImageData(nx, ny);
       const d = img.data;
-      const step = CFG.CONTOUR_STEP;
-      const nb = Math.ceil(1 / step) + 1;          // バンド→色のLUT（毎ピクセルのhypso回避）
-      const lut = new Uint8Array(nb * 3);
-      for (let b = 0; b < nb; b++) {
-        const c = hypso((b + 0.5) * step);
-        lut[b * 3] = c[0]; lut[b * 3 + 1] = c[1]; lut[b * 3 + 2] = c[2];
-      }
-      for (let v = 0; v < M; v++) {
-        const gyf = (v / (M - 1)) * (ny - 1);
-        const j = gyf | 0, fj = gyf - j, j2 = Math.min(ny - 1, j + 1);
-        for (let u = 0; u < M; u++) {
-          const gxf = (u / (M - 1)) * (nx - 1);
-          const i = gxf | 0, fi = gxf - i, i2 = Math.min(nx - 1, i + 1);
-          const h = (grid[j * nx + i] * (1 - fi) + grid[j * nx + i2] * fi) * (1 - fj)
-                  + (grid[j2 * nx + i] * (1 - fi) + grid[j2 * nx + i2] * fi) * fj;
-          let b = (h / step) | 0;
-          if (b < 0) b = 0; else if (b >= nb) b = nb - 1;
-          const idx = (v * M + u) * 4, lb = b * 3;
-          d[idx] = lut[lb]; d[idx + 1] = lut[lb + 1]; d[idx + 2] = lut[lb + 2]; d[idx + 3] = 255;
+      const Lx = -0.66, Ly = -0.66;
+      for (let j = 0; j < ny; j++) {
+        const j0 = Math.max(0, j - 1), j1 = Math.min(ny - 1, j + 1);
+        for (let i = 0; i < nx; i++) {
+          const i0 = Math.max(0, i - 1), i1 = Math.min(nx - 1, i + 1);
+          const gx = (grid[j * nx + i1] - grid[j * nx + i0]) / ((i1 - i0) * CELL);
+          const gy = (grid[j1 * nx + i] - grid[j0 * nx + i]) / ((j1 - j0) * CELL);
+          const v = clamp(0.5 + (gx * Lx + gy * Ly) * CFG.HILLSHADE, 0, 1);
+          const gray = (40 + v * 205) | 0;
+          const idx = (j * nx + i) * 4;
+          d[idx] = gray; d[idx + 1] = gray; d[idx + 2] = gray; d[idx + 3] = 95;
         }
       }
       shadeCtx.putImageData(img, 0, 0);
-      ctx.imageSmoothingEnabled = false; // ベタ塗り（境界くっきり）
-      ctx.drawImage(shadeCanvas, sxOf(0), syOf(0), (nx - 1) * CELL * ppu, (ny - 1) * CELL * ppu);
+      const cellpx = CELL * ppu;
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(shadeCanvas, sxOf(0) - cellpx / 2, syOf(0) - cellpx / 2, nx * cellpx, ny * cellpx);
     };
 
     const drawContours = () => {
@@ -507,7 +501,7 @@ export function start(canvas) {
       for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
       ctx.closePath();
       ctx.clip();
-      drawTint();
+      drawShade();
       drawContours();
       ctx.restore();
 
@@ -529,7 +523,7 @@ export function start(canvas) {
       ctx.lineWidth = 1.5;
       ctx.stroke();
     } else {
-      drawTint();
+      drawShade();
       drawContours();
     }
 
@@ -663,6 +657,30 @@ export function start(canvas) {
       ctx.moveTo(cx, cy);
       ctx.lineTo(cx + mv.x * 22, cy + mv.y * 22);
       ctx.stroke();
+    }
+
+    // 下り方向インジケータ（足元の傾き。長さ＝急さ、向き＝下り）
+    g.terrain.gradient(g.px, g.py, grad);
+    const gm = Math.hypot(grad.x, grad.y);
+    if (gm > 1e-5) {
+      const dnx = -grad.x / gm, dny = -grad.y / gm; // 下り = 勾配の逆
+      const len = clamp(gm * 1400, 7, 30);
+      const a = clamp(gm * 90, 0.25, 0.85);
+      const bx = cx + dnx * 17, by = cy + dny * 17;
+      const tx = cx + dnx * (17 + len), ty = cy + dny * (17 + len);
+      ctx.strokeStyle = `rgba(38,37,31,${a})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.lineTo(tx, ty);
+      ctx.stroke();
+      ctx.save();
+      ctx.translate(tx, ty);
+      ctx.rotate(Math.atan2(dny, dnx) + Math.PI / 2);
+      ctx.fillStyle = `rgba(38,37,31,${a})`;
+      drawTriangle(0, 2, 5);
+      ctx.fill();
+      ctx.restore();
     }
 
     if (g.state === 'ready') {
