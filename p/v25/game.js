@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -240,8 +240,7 @@ export function start(canvas) {
       far: false,                   // ビュー段階: false=通常 / true=最大引き
       viewR: CFG.VIEW_RADIUS_WORLD, // 現在の視界半径(段階へ向けて補間)
       px: 0, py: 0,
-      best: terrain.height(0, 0), // 到達した最高高度（自己記録＝スコア）
-      flash: 0,                   // 記録更新の演出タイマー
+      score: 0,             // 滞在高度の積分（高い場所に長くいるほど加点）
       items: { glove: false, goggle: false, zip: false },
       zipCharges: 0,        // ジップラインの残り使用回数(取得ごとに+1)
       pickups: spawnItems(CFG.FIELD_R),
@@ -339,9 +338,7 @@ export function start(canvas) {
     }
     if (g.state === 'play') {
       g.time += dt;
-      const hNow = g.terrain.height(g.px, g.py);
-      if (hNow > g.best) { g.best = hNow; g.flash = 0.7; } // 自己記録更新＝達成
-      if (g.flash > 0) g.flash -= dt;
+      g.score += g.terrain.height(g.px, g.py) * dt; // 高所に長くいるほど加点
       if (g.grace > 0) g.grace -= dt;
       let moved = false;
       g.curSpeed = 0;
@@ -593,21 +590,19 @@ export function start(canvas) {
     if (viewBtn) viewBtn.style.display = 'none';
   }
 
-  // 数値表示（★=自己記録＝スコア / ▲=フィールド最高＝目標 / ●=現在地）。常時表示。
-  function drawHud(playerH, maxH, best, flash) {
+  // 数値表示（▲=フィールド最高 / ●=現在地 / Σ=累積スコア）。常時表示。
+  function drawHud(playerH, maxH, score) {
     const top = 26;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    // 記録（追いかける数字。更新直後は大きく光る）
-    const pop = flash > 0 ? 1 + 0.5 * (flash / 0.7) : 1;
-    ctx.font = `700 ${Math.round(20 * pop)}px ui-monospace, "SF Mono", Menlo, monospace`;
-    ctx.fillStyle = flash > 0 ? COL.accent : '#26251f';
-    ctx.fillText('★ ' + altOf(best), W / 2, top);
-    ctx.font = '600 14px ui-monospace, "SF Mono", Menlo, monospace';
+    ctx.font = '600 16px ui-monospace, "SF Mono", Menlo, monospace';
     ctx.fillStyle = COL.peak;
-    ctx.fillText('▲ ' + altOf(maxH), W / 2, top + 24);
+    ctx.fillText('▲ ' + altOf(maxH), W / 2, top);
+    ctx.fillStyle = '#26251f';
+    ctx.fillText('● ' + altOf(playerH), W / 2, top + 24);
+    ctx.font = '600 13px ui-monospace, "SF Mono", Menlo, monospace';
     ctx.fillStyle = 'rgba(40,39,35,0.5)';
-    ctx.fillText('● ' + altOf(playerH), W / 2, top + 44);
+    ctx.fillText('Σ ' + Math.round(score * 100), W / 2, top + 47);
   }
 
   function drawTriangle(x, y, s) {
@@ -964,16 +959,6 @@ export function start(canvas) {
       ctx.stroke();
     }
 
-    if (g.flash > 0) {
-      // 自己記録更新の演出
-      const fr = 1 - g.flash / 0.7;
-      ctx.strokeStyle = `rgba(224,81,46,${0.75 * (1 - fr)})`;
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 10 + fr * 36, 0, TAU);
-      ctx.stroke();
-    }
-
     if (g.state === 'ready') {
       const pr = (g.readyPulse % 1.6) / 1.6;
       ctx.strokeStyle = `rgba(38,37,31,${0.45 * (1 - pr)})`;
@@ -995,7 +980,7 @@ export function start(canvas) {
       ctx.fill();
     }
 
-    drawHud(g.terrain.height(g.px, g.py), g.field.max.h, g.best, g.flash);
+    drawHud(g.terrain.height(g.px, g.py), g.field.max.h, g.score);
 
     // 所持アビリティを左下に小さく（ジップは残回数があるときだけ）
     {
@@ -1168,9 +1153,9 @@ export function start(canvas) {
     ctx.textBaseline = 'middle';
     ctx.font = `700 ${Math.min(W, H) * 0.13}px ui-monospace, "SF Mono", Menlo, monospace`;
     ctx.fillStyle = 'rgba(38,37,31,0.9)';
-    ctx.fillText('★ ' + altOf(g.best), W / 2, H * 0.19);
+    ctx.fillText(String(Math.round(g.score * 100)), W / 2, H * 0.19);
 
-    drawHud(ep.h, g.field.max.h, g.best, 0);
+    drawHud(ep.h, g.field.max.h, g.score);
 
     // 再挑戦を促す微かなパルス（イントロ後・言葉なし）
     if (e.t > 2.2) {
