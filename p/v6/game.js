@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -23,10 +23,8 @@ const CFG = {
   PICKUP_R: 30,           // アイテム取得の距離
   GLOVE_K_MUL: 0.34,      // グローブ装備時の登坂ペナルティ倍率
   GLOVE_MIN: 0.6,         // グローブ装備時の最低速度係数(急崖でも登れる)
-  GLOVE_MAX: 1.12,        // グローブ装備時の最高速度(下りが軽快でなくなる=不便)
   ZIP_SPEED: 300,         // ジップライン移動の等速(ワールド単位/秒)
   ZIP_ARRIVE: 6,          // 到着判定の距離
-  HILLSHADE: 220,         // 陰影の強さ(0で無効)
 };
 
 const ITEM_TYPES = ['glove', 'goggle', 'zip'];
@@ -143,8 +141,6 @@ export function start(canvas) {
   const input = createInput(canvas);
   const grid = new Float32Array(96 * 96); // ワールド固定格子の作業領域
   const grad = { x: 0, y: 0 };
-  const shadeCanvas = document.createElement('canvas'); // 陰影描画用オフスクリーン
-  const shadeCtx = shadeCanvas.getContext('2d');
 
   let game;
   let endDrag = null; // リザルトでの orbit/タップ判定
@@ -179,7 +175,6 @@ export function start(canvas) {
       viewR: CFG.VIEW_RADIUS_WORLD, // 現在の視界半径(段階へ向けて補間)
       px: 0, py: 0,
       items: { glove: false, goggle: false, zip: false },
-      zipCharges: 0,        // ジップラインの残り使用回数(取得ごとに+1)
       pickups: spawnItems(CFG.FIELD_R),
       riding: null,         // ジップライン移動中の目標 {tx,ty}
       path: [{ x: 0, y: 0, h: terrain.height(0, 0) }],
@@ -227,21 +222,15 @@ export function start(canvas) {
       if (!endDrag.moved && game.end.t > 2.2) newGame();
       endDrag = null;
     } else if (tapInfo) {
-      // 動かさない短いタップ＝ジップライン展開（残回数があり、円の視界内のみ）
-      if (game.state === 'play' && game.zipCharges > 0 && !game.riding && !tapInfo.moved &&
+      // 動かさない短いタップ＝ジップライン展開（所持時）
+      if (game.state === 'play' && game.items.zip && !tapInfo.moved &&
           performance.now() - tapInfo.t < 350) {
         const r = canvas.getBoundingClientRect();
-        const sx = tapInfo.x - r.left, sy = tapInfo.y - r.top;
-        const R = Math.min(r.width, r.height) * 0.46;
-        const inCircle = Math.hypot(sx - r.width / 2, sy - r.height / 2) <= R;
-        if (inCircle) {
-          const w = screenToWorld(sx, sy);
-          let tx = w.x, ty = w.y;
-          const td = Math.hypot(tx, ty);
-          if (td > game.field.r) { tx *= game.field.r / td; ty *= game.field.r / td; }
-          game.riding = { tx, ty };
-          game.zipCharges -= 1;
-        }
+        const w = screenToWorld(tapInfo.x - r.left, tapInfo.y - r.top);
+        let tx = w.x, ty = w.y;
+        const td = Math.hypot(tx, ty); // 目標はフィールド内にクランプ
+        if (td > game.field.r) { tx *= game.field.r / td; ty *= game.field.r / td; }
+        game.riding = { tx, ty };
       }
       tapInfo = null;
     }
@@ -280,8 +269,7 @@ export function start(canvas) {
           const along = grad.x * mv.x + grad.y * mv.y; // +で登り
           const k = g.items.glove ? CFG.UPHILL_K * CFG.GLOVE_K_MUL : CFG.UPHILL_K;
           const minF = g.items.glove ? CFG.GLOVE_MIN : CFG.SPEED_MIN;
-          const maxF = g.items.glove ? CFG.GLOVE_MAX : CFG.SPEED_MAX; // 装備時は下りが軽快でない
-          const f = clamp(1 - along * k, minF, maxF);
+          const f = clamp(1 - along * k, minF, CFG.SPEED_MAX);
           const sp = CFG.BASE_SPEED * f * mv.mag * dt;
           g.px += mv.x * sp;
           g.py += mv.y * sp;
@@ -300,7 +288,6 @@ export function start(canvas) {
           if (!it.taken && Math.hypot(g.px - it.x, g.py - it.y) < CFG.PICKUP_R) {
             it.taken = true;
             g.items[it.type] = true;
-            if (it.type === 'zip') g.zipCharges += 1; // 取得ごとに1回ぶん
           }
         }
       }
@@ -428,31 +415,6 @@ export function start(canvas) {
     const sxOf = (gx) => cx + (ox0 + gx * CELL - g.px) * ppu;
     const syOf = (gy) => cy + (oy0 + gy * CELL - g.py) * ppu;
 
-    // 陰影（北西からの光で起伏を立体的に。等高線は単色のまま）
-    const drawShade = () => {
-      if (!CFG.HILLSHADE) return;
-      shadeCanvas.width = nx; shadeCanvas.height = ny;
-      const img = shadeCtx.createImageData(nx, ny);
-      const d = img.data;
-      const Lx = -0.66, Ly = -0.66;
-      for (let j = 0; j < ny; j++) {
-        const j0 = Math.max(0, j - 1), j1 = Math.min(ny - 1, j + 1);
-        for (let i = 0; i < nx; i++) {
-          const i0 = Math.max(0, i - 1), i1 = Math.min(nx - 1, i + 1);
-          const gx = (grid[j * nx + i1] - grid[j * nx + i0]) / ((i1 - i0) * CELL);
-          const gy = (grid[j1 * nx + i] - grid[j0 * nx + i]) / ((j1 - j0) * CELL);
-          const v = clamp(0.5 + (gx * Lx + gy * Ly) * CFG.HILLSHADE, 0, 1);
-          const gray = (40 + v * 205) | 0;
-          const idx = (j * nx + i) * 4;
-          d[idx] = gray; d[idx + 1] = gray; d[idx + 2] = gray; d[idx + 3] = 95;
-        }
-      }
-      shadeCtx.putImageData(img, 0, 0);
-      const cellpx = CELL * ppu;
-      ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(shadeCanvas, sxOf(0) - cellpx / 2, syOf(0) - cellpx / 2, nx * cellpx, ny * cellpx);
-    };
-
     const drawContours = () => {
       for (const lv of levelsFor(gmin, gmax, CFG.CONTOUR_STEP)) {
         const major = Math.round(lv / CFG.CONTOUR_STEP) % 5 === 0;
@@ -501,7 +463,6 @@ export function start(canvas) {
       for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
       ctx.closePath();
       ctx.clip();
-      drawShade();
       drawContours();
       ctx.restore();
 
@@ -523,7 +484,6 @@ export function start(canvas) {
       ctx.lineWidth = 1.5;
       ctx.stroke();
     } else {
-      drawShade();
       drawContours();
     }
 
@@ -659,30 +619,6 @@ export function start(canvas) {
       ctx.stroke();
     }
 
-    // 下り方向インジケータ（足元の傾き。長さ＝急さ、向き＝下り）
-    g.terrain.gradient(g.px, g.py, grad);
-    const gm = Math.hypot(grad.x, grad.y);
-    if (gm > 1e-5) {
-      const dnx = -grad.x / gm, dny = -grad.y / gm; // 下り = 勾配の逆
-      const len = clamp(gm * 1400, 7, 30);
-      const a = clamp(gm * 90, 0.25, 0.85);
-      const bx = cx + dnx * 17, by = cy + dny * 17;
-      const tx = cx + dnx * (17 + len), ty = cy + dny * (17 + len);
-      ctx.strokeStyle = `rgba(38,37,31,${a})`;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(bx, by);
-      ctx.lineTo(tx, ty);
-      ctx.stroke();
-      ctx.save();
-      ctx.translate(tx, ty);
-      ctx.rotate(Math.atan2(dny, dnx) + Math.PI / 2);
-      ctx.fillStyle = `rgba(38,37,31,${a})`;
-      drawTriangle(0, 2, 5);
-      ctx.fill();
-      ctx.restore();
-    }
-
     if (g.state === 'ready') {
       const pr = (g.readyPulse % 1.6) / 1.6;
       ctx.strokeStyle = `rgba(38,37,31,${0.45 * (1 - pr)})`;
@@ -706,22 +642,13 @@ export function start(canvas) {
 
     drawHud(g.terrain.height(g.px, g.py), g.field.max.h);
 
-    // 所持アビリティを左下に小さく（ジップは残回数があるときだけ）
+    // 所持アビリティを左下に小さく
     {
       let n = 0;
       const bx = 26, by = H - 28;
       for (const t of ITEM_TYPES) {
-        const have = t === 'zip' ? g.zipCharges > 0 : g.items[t];
-        if (!have) continue;
-        const x = bx + n * 32;
-        drawItemGlyph(ctx, x, by, t, 9, COL.item);
-        if (t === 'zip' && g.zipCharges > 1) {
-          ctx.fillStyle = COL.item;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.font = '600 11px ui-monospace, Menlo, monospace';
-          ctx.fillText('×' + g.zipCharges, x + 14, by + 8);
-        }
+        if (!g.items[t]) continue;
+        drawItemGlyph(ctx, bx + n * 30, by, t, 9, COL.item);
         n++;
       }
     }
