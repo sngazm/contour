@@ -1,22 +1,31 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, easeInOut, easeOut, TAU, elevColor, rgba } from '../../src/util.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
 import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
 import { contourLevel, levelsFor } from '../../src/contours.js';
 import { createInput } from '../../src/input.js';
 
 const CFG = {
-  DURATION: 30,          // 1ゲームの長さ(秒)
+  DURATION: 30,           // 1ゲームの長さ(秒)
   VIEW_RADIUS_WORLD: 235, // 円窓の中心→縁が示すワールド距離
-  GRID_N: 64,            // 等高線サンプルの格子解像度
-  CONTOUR_STEP: 0.058,   // 等高線の間隔(高さ -1..1 空間)
-  BASE_SPEED: 98,        // 平地の移動速度(ワールド単位/秒)
-  UPHILL_K: 115,         // 斜面が速度に効く強さ
-  SPEED_MIN: 0.16,       // 急登での下限係数
-  SPEED_MAX: 1.7,        // 下りでの上限係数
-  PATH_MIN_STEP: 5,      // 軌跡を記録する最小移動距離
+  CELL: 7,                // ワールド固定格子のセル幅(等高線のうねり防止)
+  CONTOUR_STEP: 0.03,     // 等高線の間隔(高さ 0..1)
+  BASE_SPEED: 100,        // 平地の移動速度(ワールド単位/秒)
+  UPHILL_K: 300,          // 斜面が速度に効く強さ
+  SPEED_MIN: 0.16,        // 急登での下限係数
+  SPEED_MAX: 1.7,         // 下りでの上限係数
+  PATH_MIN_STEP: 5,       // 軌跡を記録する最小移動距離
 };
 
-const BG = '#0a0d13';
+// 白ベースの配色
+const COL = {
+  out: '#e7e6e0',       // 円窓の外
+  lens: '#f7f6f2',      // 円窓の中
+  paper: '#f5f4ef',     // リザルトの地
+  ink: 'rgba(40,39,35,0.55)',
+  inkMajor: 'rgba(26,25,22,0.9)',
+  edge: 'rgba(40,39,35,0.5)',
+  accent: '#e0512e',    // 軌跡・到達点
+};
 
 export function start(canvas) {
   const ctx = canvas.getContext('2d');
@@ -36,38 +45,58 @@ export function start(canvas) {
   resize();
 
   const input = createInput(canvas);
-  const grid = new Float32Array(CFG.GRID_N * CFG.GRID_N);
+  const grid = new Float32Array(96 * 96); // ワールド固定格子の作業領域
   const grad = { x: 0, y: 0 };
 
   let game;
-  let wantRestart = false;
-  canvas.addEventListener('pointerdown', () => { wantRestart = true; });
+  let endDrag = null; // リザルトでの orbit/タップ判定
 
   function newGame() {
     const seed = (Math.random() * 1e9) >>> 0;
     const terrain = makeTerrain(seed);
     game = {
       terrain,
-      state: 'ready',         // ready -> play -> end
-      time: 0,                // 経過(秒)
-      px: 0, py: 0,           // プレイヤーのワールド座標（原点開始）
-      start: { x: 0, y: 0 },
+      state: 'ready',
+      time: 0,
+      px: 0, py: 0,
       path: [{ x: 0, y: 0, h: terrain.height(0, 0) }],
       readyPulse: 0,
       end: null,
     };
     input.state.everPressed = false;
-    wantRestart = false;
+    endDrag = null;
   }
   newGame();
+
+  // リザルトのカメラ操作（ドラッグでorbit、タップで再挑戦）
+  canvas.addEventListener('pointerdown', (e) => {
+    if (game.state === 'end') endDrag = { x: e.clientX, y: e.clientY, moved: false };
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (game.state !== 'end' || !endDrag) return;
+    const dx = e.clientX - endDrag.x;
+    const dy = e.clientY - endDrag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 6) endDrag.moved = true;
+    const cam = game.end.cam;
+    cam.yaw += dx * 0.006;
+    cam.tiltOff = clamp(cam.tiltOff - dy * 0.004, -0.45, 0.5);
+    cam.touched = true;
+    endDrag.x = e.clientX;
+    endDrag.y = e.clientY;
+  });
+  window.addEventListener('pointerup', () => {
+    if (game.state === 'end' && endDrag) {
+      if (!endDrag.moved && game.end.t > 2.2) newGame();
+      endDrag = null;
+    }
+  });
 
   // ---- 更新 ----------------------------------------------------------------
   function update(dt) {
     const g = game;
     if (g.state === 'ready') {
       g.readyPulse += dt;
-      const mv = input.read();
-      if (mv.mag > 0) g.state = 'play';
+      if (input.read().mag > 0) g.state = 'play';
       return;
     }
     if (g.state === 'play') {
@@ -76,7 +105,7 @@ export function start(canvas) {
       if (mv.mag > 0) {
         g.terrain.gradient(g.px, g.py, grad);
         const along = grad.x * mv.x + grad.y * mv.y; // +で登り
-        let f = clamp(1 - along * CFG.UPHILL_K, CFG.SPEED_MIN, CFG.SPEED_MAX);
+        const f = clamp(1 - along * CFG.UPHILL_K, CFG.SPEED_MIN, CFG.SPEED_MAX);
         const sp = CFG.BASE_SPEED * f * mv.mag * dt;
         g.px += mv.x * sp;
         g.py += mv.y * sp;
@@ -90,7 +119,8 @@ export function start(canvas) {
     }
     if (g.state === 'end') {
       g.end.t += dt;
-      if (g.end.t > 1.8 && wantRestart) newGame();
+      // 未操作なら、イントロ後にゆっくり自動オービット
+      if (!g.end.cam.touched && g.end.t > 3.0) g.end.cam.yaw += 0.09 * dt;
     }
   }
 
@@ -100,140 +130,146 @@ export function start(canvas) {
     if (Math.hypot(g.px - last.x, g.py - last.y) > 0.5) {
       g.path.push({ x: g.px, y: g.py, h: g.terrain.height(g.px, g.py) });
     }
-    // 軌跡の範囲を求めて、余白を足した俯瞰領域を作る
+    // 軌跡の範囲＋余白で俯瞰領域を決める
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const p of g.path) {
       minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
       minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
     }
-    let span = Math.max(maxX - minX, maxY - minY, 400);
-    const pad = span * 0.45;
+    const span = Math.max(maxX - minX, maxY - minY, 420);
+    const half = span / 2 + span * 0.5;
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
-    const half = span / 2 + pad;
-    const region = { cx, cy, half };
 
-    // 地形を一度だけサンプリング（以後は投影だけ毎フレーム）
-    const CX = 132, RY = 96;
+    // 等高線を一度だけ抽出し、3Dセグメント(両端=同じ標高)として保存
+    const CX = 120, RY = 120;
     const heights = new Float32Array(CX * RY);
     let gmin = Infinity, gmax = -Infinity;
     for (let r = 0; r < RY; r++) {
-      const wy = cy - half + (2 * half) * (r / (RY - 1));
       for (let c = 0; c < CX; c++) {
         const wx = cx - half + (2 * half) * (c / (CX - 1));
-        const hh = g.terrain.height(wx, wy);
-        heights[r * CX + c] = hh;
-        if (hh < gmin) gmin = hh;
-        if (hh > gmax) gmax = hh;
+        const wy = cy - half + (2 * half) * (r / (RY - 1));
+        const h = g.terrain.height(wx, wy);
+        heights[r * CX + c] = h;
+        if (h < gmin) gmin = h;
+        if (h > gmax) gmax = h;
       }
     }
-    g.end = { t: 0, region, heights, CX, RY, gmin, gmax };
+    const sx0 = [], sy0 = [], sx1 = [], sy1 = [], sh = [];
+    const toWX = (c) => cx - half + (2 * half) * (c / (CX - 1));
+    const toWY = (r) => cy - half + (2 * half) * (r / (RY - 1));
+    for (const lv of levelsFor(gmin, gmax, CFG.CONTOUR_STEP)) {
+      contourLevel(heights, CX, RY, lv, (a, b, c, d) => {
+        sx0.push(toWX(a)); sy0.push(toWY(b));
+        sx1.push(toWX(c)); sy1.push(toWY(d));
+        sh.push(lv);
+      });
+    }
+
+    g.end = {
+      t: 0,
+      region: { cx, cy, half },
+      gmin, gmax,
+      seg: {
+        x0: Float32Array.from(sx0), y0: Float32Array.from(sy0),
+        x1: Float32Array.from(sx1), y1: Float32Array.from(sy1),
+        h: Float32Array.from(sh), n: sh.length,
+      },
+      cam: { yaw: 0, tiltOff: 0, touched: false },
+    };
     g.state = 'end';
-    wantRestart = false;
+    endDrag = null;
   }
 
   // ---- 描画: トップダウン（円窓） -----------------------------------------
-  function gridIndexToScreen(gx, gy, cell, cx, cy, ppu) {
-    return [
-      cx + (gx * cell - CFG.VIEW_RADIUS_WORLD) * ppu,
-      cy + (gy * cell - CFG.VIEW_RADIUS_WORLD) * ppu,
-    ];
-  }
-
   function renderPlay() {
     const g = game;
     const cx = W / 2, cy = H / 2;
     const R = Math.min(W, H) * 0.46;
-    const ppu = R / CFG.VIEW_RADIUS_WORLD;
     const VR = CFG.VIEW_RADIUS_WORLD;
-    const N = CFG.GRID_N;
-    const cell = (2 * VR) / (N - 1);
+    const CELL = CFG.CELL;
+    const ppu = R / VR;
 
-    ctx.fillStyle = BG;
+    ctx.fillStyle = COL.out;
     ctx.fillRect(0, 0, W, H);
 
-    // 円窓クリップ
     ctx.save();
     ctx.beginPath();
     ctx.arc(cx, cy, R, 0, TAU);
     ctx.clip();
-
-    // レンズ内の下地
-    ctx.fillStyle = '#0f141d';
+    ctx.fillStyle = COL.lens;
     ctx.fillRect(cx - R, cy - R, 2 * R, 2 * R);
 
-    // 高さ格子をサンプリング
+    // ワールドに固定した格子をサンプリング（視点移動でうねらない）
+    const ox0 = Math.floor((g.px - VR) / CELL) * CELL;
+    const oy0 = Math.floor((g.py - VR) / CELL) * CELL;
+    const nx = Math.ceil((2 * VR) / CELL) + 2;
+    const ny = nx;
     let gmin = Infinity, gmax = -Infinity;
-    for (let j = 0; j < N; j++) {
-      const wy = g.py - VR + j * cell;
-      for (let i = 0; i < N; i++) {
-        const wx = g.px - VR + i * cell;
-        const h = g.terrain.height(wx, wy);
-        grid[j * N + i] = h;
+    for (let j = 0; j < ny; j++) {
+      const wy = oy0 + j * CELL;
+      for (let i = 0; i < nx; i++) {
+        const h = g.terrain.height(ox0 + i * CELL, wy);
+        grid[j * nx + i] = h;
         if (h < gmin) gmin = h;
         if (h > gmax) gmax = h;
       }
     }
 
-    // 見えている範囲のレベルだけ描く
-    const levels = levelsFor(gmin, gmax, CFG.CONTOUR_STEP);
-    for (const lv of levels) {
+    const sxOf = (gx) => cx + (ox0 + gx * CELL - g.px) * ppu;
+    const syOf = (gy) => cy + (oy0 + gy * CELL - g.py) * ppu;
+    for (const lv of levelsFor(gmin, gmax, CFG.CONTOUR_STEP)) {
       const major = Math.round(lv / CFG.CONTOUR_STEP) % 5 === 0;
-      const col = elevColor(lv);
-      ctx.strokeStyle = rgba(col, major ? 0.95 : 0.5);
-      ctx.lineWidth = major ? 1.7 : 1;
+      ctx.strokeStyle = major ? COL.inkMajor : COL.ink;
+      ctx.lineWidth = major ? 1.6 : 1;
       ctx.beginPath();
-      contourLevel(grid, N, N, lv, (x0, y0, x1, y1) => {
-        const [sx0, sy0] = gridIndexToScreen(x0, y0, cell, cx, cy, ppu);
-        const [sx1, sy1] = gridIndexToScreen(x1, y1, cell, cx, cy, ppu);
-        ctx.moveTo(sx0, sy0);
-        ctx.lineTo(sx1, sy1);
+      contourLevel(grid, nx, ny, lv, (a, b, c, d) => {
+        ctx.moveTo(sxOf(a), syOf(b));
+        ctx.lineTo(sxOf(c), syOf(d));
       });
       ctx.stroke();
     }
 
-    // ふちのビネット
-    const vg = ctx.createRadialGradient(cx, cy, R * 0.62, cx, cy, R);
-    vg.addColorStop(0, 'rgba(10,13,19,0)');
-    vg.addColorStop(1, 'rgba(10,13,19,0.85)');
+    // ふちを軽く沈めてレンズ感を出す
+    const vg = ctx.createRadialGradient(cx, cy, R * 0.6, cx, cy, R);
+    vg.addColorStop(0, 'rgba(120,116,104,0)');
+    vg.addColorStop(1, 'rgba(120,116,104,0.22)');
     ctx.fillStyle = vg;
     ctx.fillRect(cx - R, cy - R, 2 * R, 2 * R);
-
     ctx.restore();
 
     // レンズの縁
     ctx.lineWidth = 2;
-    ctx.strokeStyle = 'rgba(220,228,240,0.18)';
+    ctx.strokeStyle = COL.edge;
     ctx.beginPath();
     ctx.arc(cx, cy, R, 0, TAU);
     ctx.stroke();
 
-    // 残り時間リング（上から時計回りに減る）
+    // 残り時間リング
     if (g.state === 'play') {
       const remain = clamp(1 - g.time / CFG.DURATION, 0, 1);
       const warm = g.time / CFG.DURATION > 0.8;
       ctx.lineWidth = 3;
-      ctx.strokeStyle = warm ? 'rgba(235,150,110,0.9)' : 'rgba(225,232,245,0.65)';
+      ctx.strokeStyle = warm ? COL.accent : 'rgba(40,39,35,0.45)';
       ctx.beginPath();
       ctx.arc(cx, cy, R + 7, -Math.PI / 2, -Math.PI / 2 + remain * TAU);
       ctx.stroke();
     }
 
-    // プレイヤー（常に中央）
+    // プレイヤー（中央固定）
     const mv = input.read();
-    let pulse = 1;
-    if (g.state === 'ready') pulse = 1 + 0.12 * Math.sin(g.readyPulse * 4);
-    ctx.fillStyle = 'rgba(245,248,255,0.95)';
+    const pulse = g.state === 'ready' ? 1 + 0.12 * Math.sin(g.readyPulse * 4) : 1;
+    ctx.fillStyle = '#26251f';
     ctx.beginPath();
     ctx.arc(cx, cy, 7 * pulse, 0, TAU);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(245,248,255,0.35)';
+    ctx.strokeStyle = 'rgba(38,37,31,0.35)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.arc(cx, cy, 13 * pulse, 0, TAU);
     ctx.stroke();
     if (mv.mag > 0) {
-      ctx.strokeStyle = 'rgba(245,248,255,0.8)';
+      ctx.strokeStyle = '#26251f';
       ctx.lineWidth = 2.5;
       ctx.beginPath();
       ctx.moveTo(cx, cy);
@@ -241,148 +277,145 @@ export function start(canvas) {
       ctx.stroke();
     }
 
-    // ready: 始動を促すパルス（言葉なし）
     if (g.state === 'ready') {
       const pr = (g.readyPulse % 1.6) / 1.6;
-      ctx.strokeStyle = `rgba(245,248,255,${0.5 * (1 - pr)})`;
+      ctx.strokeStyle = `rgba(38,37,31,${0.45 * (1 - pr)})`;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(cx, cy, 13 + pr * 40, 0, TAU);
       ctx.stroke();
     }
 
-    // フローティングスティックの表示
     if (mv.active) {
-      ctx.strokeStyle = 'rgba(245,248,255,0.18)';
+      ctx.strokeStyle = 'rgba(38,37,31,0.18)';
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(mv.ox, mv.oy, 64, 0, TAU);
       ctx.stroke();
-      ctx.fillStyle = 'rgba(245,248,255,0.55)';
+      ctx.fillStyle = 'rgba(38,37,31,0.4)';
       ctx.beginPath();
       ctx.arc(mv.px, mv.py, 18, 0, TAU);
       ctx.fill();
     }
   }
 
-  // ---- 描画: 斜め俯瞰のリプレイ ------------------------------------------
+  // ---- 描画: 斜め俯瞰のリプレイ（orbit可） -------------------------------
   function renderEnd() {
     const g = game;
     const e = g.end;
     const { cx, cy, half } = e.region;
 
-    // 背景（上ほど暗く）
-    const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
-    bgGrad.addColorStop(0, '#070a10');
-    bgGrad.addColorStop(1, '#0e131c');
-    ctx.fillStyle = bgGrad;
+    ctx.fillStyle = COL.paper;
     ctx.fillRect(0, 0, W, H);
 
-    const intro = clamp(e.t / 2.6, 0, 1);
-    const tilt = easeInOut(intro) * 1.02;        // 0(真上)→約58度
+    // カメラ: 真上(プレイヤー中心・ゲーム中のズーム)から、引きながら傾く
+    const R = Math.min(W, H) * 0.46;
+    const k = easeInOut(clamp(e.t / 3.2, 0, 1));
+    const tilt = clamp(lerp(0, 0.98, k) + e.cam.tiltOff, 0.12, 1.32);
+    const yaw = e.cam.yaw;
     const ct = Math.cos(tilt), st = Math.sin(tilt);
-    const zoom = 0.84 + 0.16 * easeOut(intro);
-    const scale = (Math.min(W, H) * 0.78) / (2 * half) * zoom;
+    const cyaw = Math.cos(yaw), syaw = Math.sin(yaw);
+
+    const startScale = R / CFG.VIEW_RADIUS_WORLD;          // ゲーム中と同じ縮尺
+    const fitScale = (Math.min(W, H) * 0.8) / (2 * half);
+    const scale = lerp(startScale, fitScale, k);
+    const ep = g.path[g.path.length - 1];
+    const ccx = lerp(ep.x, cx, k); // 視野中心: 到達点 → 領域中心
+    const ccy = lerp(ep.y, cy, k);
     const ox = W / 2;
-    const oy = H * 0.52 + half * scale * st * 0.5; // 持ち上がる分を中央寄せ
+    const oy = H * 0.54;
     const EXAG = 1.25;
+    const depthHalf = half * 1.45;
 
     const project = (wx, wy, h) => {
-      const X = wx - cx;
-      const Y = wy - cy;
-      const hz = h * HEIGHT_SCALE * EXAG;
-      return [ox + X * scale, oy + Y * scale * ct - hz * scale * st];
+      const X = wx - ccx, Y = wy - ccy;
+      const rx = X * cyaw - Y * syaw;
+      const ry = X * syaw + Y * cyaw;
+      const Z = h * HEIGHT_SCALE * EXAG;
+      return {
+        sx: ox + rx * scale,
+        sy: oy + ry * scale * ct - Z * scale * st,
+        ry,
+      };
     };
 
-    // 地形を尾根線で描く（奥→手前、隠面消去のため下を塗りつぶす）
-    const { heights, CX, RY } = e;
-    const baseY = H + 40;
-    for (let r = 0; r < RY; r++) {
-      const wy = cy - half + (2 * half) * (r / (RY - 1));
-      let sumH = 0;
+    // イントロ序盤は円窓が開いていくように見せる
+    const diag = Math.hypot(W, H);
+    const maskR = lerp(R, diag, easeOut(clamp(e.t / 0.8, 0, 1)));
+    const masking = maskR < diag - 1;
+    if (masking) {
+      ctx.save();
       ctx.beginPath();
-      for (let c = 0; c < CX; c++) {
-        const wx = cx - half + (2 * half) * (c / (CX - 1));
-        const h = heights[r * CX + c];
-        sumH += h;
-        const [sx, sy] = project(wx, wy, h);
-        if (c === 0) ctx.moveTo(sx, sy);
-        else ctx.lineTo(sx, sy);
-      }
-      // 下端まで閉じて背景色で塗り、奥の線を隠す
-      const lastX = project(cx + half, wy, 0)[0];
-      const firstX = project(cx - half, wy, 0)[0];
-      ctx.lineTo(lastX, baseY);
-      ctx.lineTo(firstX, baseY);
-      ctx.closePath();
-      ctx.fillStyle = '#0b0f17';
-      ctx.fill();
-
-      const col = elevColor(sumH / CX);
-      ctx.strokeStyle = rgba(col, 0.9 * intro + 0.1);
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (let c = 0; c < CX; c++) {
-        const wx = cx - half + (2 * half) * (c / (CX - 1));
-        const h = heights[r * CX + c];
-        const [sx, sy] = project(wx, wy, h);
-        if (c === 0) ctx.moveTo(sx, sy);
-        else ctx.lineTo(sx, sy);
-      }
-      ctx.stroke();
+      ctx.arc(W / 2, H / 2, maskR, 0, TAU);
+      ctx.clip();
     }
 
-    // 軌跡（地形の上に発光線で）
-    ctx.save();
-    ctx.shadowColor = 'rgba(120,200,255,0.9)';
-    ctx.shadowBlur = 10;
-    ctx.strokeStyle = 'rgba(150,210,255,0.95)';
-    ctx.lineWidth = 2.4;
+    // 等高線を奥行きで濃淡分け（multiplyで前後の見え方を出す）
+    const BANDS = 8;
+    const paths = [];
+    for (let i = 0; i < BANDS; i++) paths.push(new Path2D());
+    const s = e.seg;
+    for (let i = 0; i < s.n; i++) {
+      const a = project(s.x0[i], s.y0[i], s.h[i]);
+      const b = project(s.x1[i], s.y1[i], s.h[i]);
+      const depthN = clamp(((a.ry + b.ry) * 0.5 / depthHalf) * 0.5 + 0.5, 0, 1);
+      const band = clamp((depthN * BANDS) | 0, 0, BANDS - 1);
+      paths[band].moveTo(a.sx, a.sy);
+      paths[band].lineTo(b.sx, b.sy);
+    }
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.lineWidth = 1;
+    for (let band = 0; band < BANDS; band++) {
+      const gray = Math.round(lerp(210, 55, (band + 0.5) / BANDS)); // 奥=薄 手前=濃
+      ctx.strokeStyle = `rgb(${gray},${gray},${gray})`;
+      ctx.stroke(paths[band]);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+
+    // 軌跡
+    ctx.strokeStyle = COL.accent;
+    ctx.lineWidth = 2.6;
     ctx.beginPath();
     for (let i = 0; i < g.path.length; i++) {
       const p = g.path[i];
-      const [sx, sy] = project(p.x, p.y, p.h);
-      if (i === 0) ctx.moveTo(sx, sy);
-      else ctx.lineTo(sx, sy);
+      const pr = project(p.x, p.y, p.h);
+      if (i === 0) ctx.moveTo(pr.sx, pr.sy);
+      else ctx.lineTo(pr.sx, pr.sy);
     }
     ctx.stroke();
-    ctx.restore();
 
-    // スタート地点（小さな輪）
+    // スタート地点
     const sp = g.path[0];
-    const [ssx, ssy] = project(sp.x, sp.y, sp.h);
-    ctx.strokeStyle = 'rgba(245,248,255,0.7)';
+    const spr = project(sp.x, sp.y, sp.h);
+    ctx.strokeStyle = 'rgba(40,39,35,0.65)';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(ssx, ssy, 7, 0, TAU);
+    ctx.arc(spr.sx, spr.sy, 7, 0, TAU);
     ctx.stroke();
 
-    // 到達地点：高さを示す縦線 + 脈打つ点
-    const ep = g.path[g.path.length - 1];
-    const [esx, esy] = project(ep.x, ep.y, ep.h);
-    const [bx, by] = project(ep.x, ep.y, e.gmin); // 最低標高まで落とした基準線
-    ctx.strokeStyle = 'rgba(255,210,140,0.5)';
+    // 到達地点: 高さを示す縦線 + 脈打つ点
+    const epr = project(ep.x, ep.y, ep.h);
+    const base = project(ep.x, ep.y, e.gmin);
+    ctx.strokeStyle = 'rgba(224,81,46,0.45)';
     ctx.setLineDash([4, 5]);
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(bx, by);
-    ctx.lineTo(esx, esy);
+    ctx.moveTo(base.sx, base.sy);
+    ctx.lineTo(epr.sx, epr.sy);
     ctx.stroke();
     ctx.setLineDash([]);
-
-    const pr = 1 + 0.25 * Math.sin(e.t * 5);
-    ctx.fillStyle = 'rgba(255,222,160,0.95)';
-    ctx.shadowColor = 'rgba(255,200,120,0.9)';
-    ctx.shadowBlur = 14;
+    const pulse = 1 + 0.22 * Math.sin(e.t * 5);
+    ctx.fillStyle = COL.accent;
     ctx.beginPath();
-    ctx.arc(esx, esy, 7 * pr, 0, TAU);
+    ctx.arc(epr.sx, epr.sy, 7 * pulse, 0, TAU);
     ctx.fill();
-    ctx.shadowBlur = 0;
 
-    // リスタートを促す微かなパルス（イントロ後・言葉なし）
-    if (e.t > 1.8) {
+    if (masking) ctx.restore();
+
+    // 再挑戦を促す微かなパルス（イントロ後・言葉なし）
+    if (e.t > 2.2) {
       const rp = (e.t % 1.8) / 1.8;
-      ctx.strokeStyle = `rgba(245,248,255,${0.4 * (1 - rp)})`;
+      ctx.strokeStyle = `rgba(38,37,31,${0.35 * (1 - rp)})`;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.arc(W / 2, H * 0.9, 8 + rp * 26, 0, TAU);
@@ -395,7 +428,7 @@ export function start(canvas) {
   function frame(now) {
     let dt = (now - prev) / 1000;
     prev = now;
-    if (dt > 0.05) dt = 0.05; // タブ復帰などの大ジャンプを抑制
+    if (dt > 0.05) dt = 0.05;
     update(dt);
     if (game.state === 'end') renderEnd();
     else renderPlay();

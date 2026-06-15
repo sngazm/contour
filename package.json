@@ -2,6 +2,7 @@
   "name": "contour",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "等高線の地形を歩くミニマルなブラウザゲームのプロトタイプ置き場",
   "scripts": {
     "dev": "npx --yes serve@14 -l 5173 .",
