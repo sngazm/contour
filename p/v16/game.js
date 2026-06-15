@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -221,9 +221,7 @@ export function start(canvas) {
       zipCharges: 0,        // ジップラインの残り使用回数(取得ごとに+1)
       pickups: spawnItems(CFG.FIELD_R),
       riding: null,         // ジップライン移動中の目標 {tx,ty}
-      fall: null,           // 転落中の速度 {vx,vy,t}（操作不能）
-      stun: 0,              // 転落後の放心時間(操作不能)
-      stunMax: 0,
+      fall: null,           // 転落中の速度 {vx,vy}（操作不能）
       curSpeed: 0,          // 現在の速度係数(描画の線長に使用)
       moveDir: { x: 0, y: 0 },
       path: [{ x: 0, y: 0, h: terrain.height(0, 0) }],
@@ -326,7 +324,6 @@ export function start(canvas) {
         moved = true;
       } else if (g.fall) {
         // 転落中：操作不能。下り方向(=勾配の逆)へ加速しながら滑り落ちる
-        g.fall.t += dt;
         g.terrain.gradient(g.px, g.py, grad);
         const steep = Math.hypot(grad.x, grad.y);
         if (steep > 1e-6) {
@@ -341,16 +338,8 @@ export function start(canvas) {
         const spd = Math.hypot(g.fall.vx, g.fall.vy);
         if (spd > 1e-4) { g.moveDir.x = g.fall.vx / spd; g.moveDir.y = g.fall.vy / spd; }
         g.curSpeed = spd / CFG.BASE_SPEED;
-        if (steep < CFG.FALL_RECOVER && spd < 70) {
-          // 緩斜面で停止 → 落下時間に応じて放心(1〜3秒)
-          g.stun = clamp(g.fall.t * 1.3, 1, 3);
-          g.stunMax = g.stun;
-          g.fall = null;
-        }
+        if (steep < CFG.FALL_RECOVER && spd < 70) g.fall = null; // 緩斜面で踏ん張り回復
         moved = true;
-      } else if (g.stun > 0) {
-        // 放心：操作不能でその場に
-        g.stun -= dt;
       } else {
         const mv = input.read();
         // 転落判定：急すぎる／急斜面で登っていない なら転がり落ちる
@@ -360,7 +349,7 @@ export function start(canvas) {
         const fallS = CFG.FALL_SLOPE * mul, climbMax = CFG.CLIMB_MAX * mul;
         const climbing = mv.mag > 0.25 && (grad.x * mv.x + grad.y * mv.y) > 0; // 上りへ踏ん張る
         if (steep > climbMax || (steep > fallS && !climbing)) {
-          g.fall = { vx: 0, vy: 0, t: 0 };
+          g.fall = { vx: 0, vy: 0 };
           moved = true;
         } else if (mv.mag > 0) {
           // 進行方向の±一定距離の平均勾配（瞬間の凹凸でガタつかせない）
@@ -753,26 +742,17 @@ export function start(canvas) {
     // プレイヤー（中央固定）。転落中は操作不能を表すアクセント色＆回転
     const mv = input.read();
     const falling = !!g.fall;
-    const stunned = g.stun > 0;
     const pulse = g.state === 'ready' ? 1 + 0.12 * Math.sin(g.readyPulse * 4) : 1;
-    ctx.fillStyle = (falling || stunned) ? COL.accent : '#26251f';
+    ctx.fillStyle = falling ? COL.accent : '#26251f';
     ctx.beginPath();
     ctx.arc(cx, cy, 7 * pulse, 0, TAU);
     ctx.fill();
-    ctx.strokeStyle = (falling || stunned) ? 'rgba(224,81,46,0.4)' : 'rgba(38,37,31,0.35)';
+    ctx.strokeStyle = falling ? 'rgba(224,81,46,0.4)' : 'rgba(38,37,31,0.35)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.arc(cx, cy, 13 * pulse, 0, TAU);
     ctx.stroke();
-    if (stunned) {
-      // 放心：回復までの減っていくリング（操作不能の合図）
-      const frac = clamp(g.stun / (g.stunMax || 1), 0, 1);
-      ctx.strokeStyle = COL.accent;
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 17, -Math.PI / 2, -Math.PI / 2 + frac * TAU);
-      ctx.stroke();
-    } else if (falling) {
+    if (falling) {
       // ぐるぐる回る短い棒＝制御不能の合図
       const ang = g.time * 16;
       ctx.strokeStyle = COL.accent;
