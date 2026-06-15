@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -33,11 +33,6 @@ const CFG = {
   FALL_ACCEL: 220000,     // 転落の加速(傾斜に比例)
   FALL_DRAG: 3,           // 転落の減衰(/秒)
   GLOVE_FALL_MUL: 2.6,    // グローブ装備で転落しにくくなる倍率
-  NPC_COUNT: 10,          // NPCの数
-  NPC_SPEED: 62,          // NPCの基礎速度(プレイヤーより遅い)
-  NPC_AGGRO: 520,         // この距離以内ならプレイヤーを追う
-  NPC_PUSH_R: 26,         // この距離で突き落とす
-  NPC_PUSH_SPEED: 250,    // 突き落としの初速
 };
 
 const ITEM_TYPES = ['glove', 'goggle', 'zip'];
@@ -50,17 +45,6 @@ const GRAY5 = [
   [224, 221, 214],
   [246, 244, 239],
 ];
-
-// NPCを撒く（開始地点から離して散らす）
-function spawnNpcs(R) {
-  const list = [];
-  for (let i = 0; i < CFG.NPC_COUNT; i++) {
-    const a = Math.random() * TAU;
-    const r = 260 + Math.random() * (R - 320);
-    list.push({ x: Math.cos(a) * r, y: Math.sin(a) * r });
-  }
-  return list;
-}
 
 // セパラブルなボックスぼかし（src→dst、tmp は作業用）
 function boxBlur(src, nx, ny, rb, tmp, dst) {
@@ -236,7 +220,6 @@ export function start(canvas) {
       items: { glove: false, goggle: false, zip: false },
       zipCharges: 0,        // ジップラインの残り使用回数(取得ごとに+1)
       pickups: spawnItems(CFG.FIELD_R),
-      npcs: spawnNpcs(CFG.FIELD_R),
       riding: null,         // ジップライン移動中の目標 {tx,ty}
       fall: null,           // 転落中の速度 {vx,vy,t}（操作不能）
       stun: 0,              // 転落後の放心時間(操作不能)
@@ -411,28 +394,6 @@ export function start(canvas) {
             g.items[it.type] = true;
             if (it.type === 'zip') g.zipCharges += 1; // 取得ごとに1回ぶん
           }
-        }
-      }
-      // NPC：普段は局所最高点へ（勾配上昇）／近いと追ってきて突き落とす
-      for (const n of g.npcs) {
-        const dpx = g.px - n.x, dpy = g.py - n.y;
-        const dp = Math.hypot(dpx, dpy);
-        g.terrain.gradient(n.x, n.y, grad);
-        const m = Math.hypot(grad.x, grad.y);
-        let dirx = 0, diry = 0;
-        if (dp < CFG.NPC_AGGRO && dp > 1e-3) { dirx = dpx / dp; diry = dpy / dp; }
-        else if (m > 1e-6) { dirx = grad.x / m; diry = grad.y / m; }
-        const along = grad.x * dirx + grad.y * diry;
-        const f = clamp(1 - along * CFG.UPHILL_K, 0.3, 1.4);
-        const sp = CFG.NPC_SPEED * f * dt;
-        n.x += dirx * sp; n.y += diry * sp;
-        const nd = Math.hypot(n.x, n.y);
-        if (nd > g.field.r) { n.x *= g.field.r / nd; n.y *= g.field.r / nd; }
-        // 突き落とし（既存の転落システムを流用）
-        if (dp < CFG.NPC_PUSH_R && !g.fall && g.stun <= 0) {
-          const ux = dpx / (dp || 1), uy = dpy / (dp || 1);
-          g.fall = { vx: ux * CFG.NPC_PUSH_SPEED, vy: uy * CFG.NPC_PUSH_SPEED, t: 0 };
-          n.x -= ux * 30; n.y -= uy * 30;
         }
       }
       if (g.time >= CFG.DURATION) beginEnd();
@@ -715,23 +676,6 @@ export function start(canvas) {
       ctx.arc(sx, sy, 13, 0, TAU);
       ctx.stroke();
       drawItemGlyph(ctx, sx, sy, it.type, 9, COL.item);
-    }
-
-    // NPC（視界内）。プレイヤーを追っている個体はアクセントで警告
-    for (const n of g.npcs) {
-      const ddx = n.x - g.px, ddy = n.y - g.py;
-      if (Math.hypot(ddx, ddy) >= VR) continue;
-      const sx = cx + ddx * ppu, sy = cy + ddy * ppu;
-      const chasing = Math.hypot(ddx, ddy) < CFG.NPC_AGGRO;
-      ctx.fillStyle = '#46423b';
-      ctx.beginPath();
-      ctx.arc(sx, sy, 5.5, 0, TAU);
-      ctx.fill();
-      ctx.strokeStyle = chasing ? COL.accent : 'rgba(38,37,31,0.4)';
-      ctx.lineWidth = chasing ? 2 : 1.4;
-      ctx.beginPath();
-      ctx.arc(sx, sy, chasing ? 9 + itemPulse * 3 : 8, 0, TAU);
-      ctx.stroke();
     }
 
     // ジップラインのワイヤー（移動中）
