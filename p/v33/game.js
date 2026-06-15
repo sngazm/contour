@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 60,           // 1ゲームの長さ(秒)
@@ -54,6 +54,21 @@ const RV_BLUR = 12; // 尾根谷度の近傍半径(セル数。広いほどマ�
 // 高度カラー(4色): 下から 青→緑→黄土→白。しきいは高さ0..1。
 const ALT4 = [[58, 108, 162], [104, 156, 86], [184, 150, 78], [240, 238, 230]];
 const ALT_TH = [0.15, 0.24, 0.35];
+// リザルトの塗りは連続グラデ（グラフのように滑らかに）
+const RES_STOPS = [[0.04, [58, 108, 162]], [0.17, [104, 156, 86]], [0.28, [184, 150, 78]], [0.47, [240, 238, 230]]];
+function altSmooth(h, out) {
+  let s = RES_STOPS;
+  if (h <= s[0][0]) { out[0] = s[0][1][0]; out[1] = s[0][1][1]; out[2] = s[0][1][2]; return; }
+  for (let i = 1; i < s.length; i++) {
+    if (h <= s[i][0]) {
+      const t = (h - s[i - 1][0]) / (s[i][0] - s[i - 1][0]);
+      const a = s[i - 1][1], b = s[i][1];
+      out[0] = a[0] + (b[0] - a[0]) * t; out[1] = a[1] + (b[1] - a[1]) * t; out[2] = a[2] + (b[2] - a[2]) * t;
+      return;
+    }
+  }
+  const l = s[s.length - 1][1]; out[0] = l[0]; out[1] = l[1]; out[2] = l[2];
+}
 const SHADE_LO = 0.68; // 谷の暗さ
 const SHADE_HI = 1.16; // 尾根の明るさ
 
@@ -1179,11 +1194,11 @@ export function start(canvas) {
         }
       }
       cells.sort((a, b) => a[0] - b[0]); // 奥（ry小）から手前へ
+      const col = [0, 0, 0];
       for (let ci = 0; ci < cells.length; ci++) {
         const k = cells[ci][1], r = cells[ci][2], c = cells[ci][3];
         const k10 = k + 1, k11 = (r + 1) * CXr + c + 1, k01 = (r + 1) * CXr + c;
-        const hm = H4[k]; // プレイ画面と同じ4色のくっきり塗り分け
-        const col = hm < ALT_TH[0] ? ALT4[0] : hm < ALT_TH[1] ? ALT4[1] : hm < ALT_TH[2] ? ALT4[2] : ALT4[3];
+        altSmooth(H4[k], col); // 連続グラデで滑らかに
         const shade = SHADE_LO + (SHADE_HI - SHADE_LO) * clamp(0.5 + rvg[k] * rvs, 0, 1);
         const cs = `rgb(${Math.min(255, col[0] * shade) | 0},${Math.min(255, col[1] * shade) | 0},${Math.min(255, col[2] * shade) | 0})`;
         ctx.fillStyle = cs; ctx.strokeStyle = cs; ctx.lineWidth = 1; // 同色stroke で継ぎ目を消す
