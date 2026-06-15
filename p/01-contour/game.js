@@ -14,7 +14,11 @@ const CFG = {
   SPEED_MIN: 0.16,        // 急登での下限係数
   SPEED_MAX: 1.7,         // 下りでの上限係数
   PATH_MIN_STEP: 5,       // 軌跡を記録する最小移動距離
+  FIELD_R: 1500,          // フィールド(ステージ)の半径。これが最高地点の探索範囲
 };
+
+// 高度を読みやすい整数に
+const altOf = (h) => Math.round(h * 1000);
 
 // 白ベースの配色
 const COL = {
@@ -25,7 +29,39 @@ const COL = {
   inkMajor: 'rgba(26,25,22,0.9)',
   edge: 'rgba(40,39,35,0.5)',
   accent: '#e0512e',    // 軌跡・到達点
+  peak: '#c8920a',      // フィールド最高地点
 };
+
+// フィールド内の最高地点を探す（粗いグリッド → 勾配上昇で微調整）
+function findFieldMax(terrain, R) {
+  let best = { x: 0, y: 0, h: -1 };
+  const N = 72;
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const x = -R + (2 * R) * (i / (N - 1));
+      const y = -R + (2 * R) * (j / (N - 1));
+      if (x * x + y * y > R * R) continue;
+      const h = terrain.height(x, y);
+      if (h > best.h) best = { x, y, h };
+    }
+  }
+  const g = { x: 0, y: 0 };
+  let x = best.x, y = best.y;
+  let step = (2 * R) / (N - 1);
+  for (let it = 0; it < 60; it++) {
+    terrain.gradient(x, y, g);
+    const m = Math.hypot(g.x, g.y) || 1;
+    const nx = x + (g.x / m) * step;
+    const ny = y + (g.y / m) * step;
+    if (nx * nx + ny * ny <= R * R) {
+      const nh = terrain.height(nx, ny);
+      if (nh > best.h) { best = { x: nx, y: ny, h: nh }; x = nx; y = ny; continue; }
+    }
+    step *= 0.6;
+    if (step < 0.4) break;
+  }
+  return best;
+}
 
 export function start(canvas) {
   const ctx = canvas.getContext('2d');
@@ -56,6 +92,7 @@ export function start(canvas) {
     const terrain = makeTerrain(seed);
     game = {
       terrain,
+      field: { r: CFG.FIELD_R, max: findFieldMax(terrain, CFG.FIELD_R) },
       state: 'ready',
       time: 0,
       px: 0, py: 0,
@@ -109,6 +146,8 @@ export function start(canvas) {
         const sp = CFG.BASE_SPEED * f * mv.mag * dt;
         g.px += mv.x * sp;
         g.py += mv.y * sp;
+        const d = Math.hypot(g.px, g.py); // フィールド外には出られない
+        if (d > g.field.r) { g.px *= g.field.r / d; g.py *= g.field.r / d; }
         const last = g.path[g.path.length - 1];
         if (Math.hypot(g.px - last.x, g.py - last.y) >= CFG.PATH_MIN_STEP) {
           g.path.push({ x: g.px, y: g.py, h: g.terrain.height(g.px, g.py) });
@@ -136,6 +175,10 @@ export function start(canvas) {
       minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
       minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
     }
+    // 最高地点も必ず画に収める
+    const pk = g.field.max;
+    minX = Math.min(minX, pk.x); maxX = Math.max(maxX, pk.x);
+    minY = Math.min(minY, pk.y); maxY = Math.max(maxY, pk.y);
     const span = Math.max(maxX - minX, maxY - minY, 420);
     const half = span / 2 + span * 0.5;
     const cx = (minX + maxX) / 2;
@@ -179,6 +222,26 @@ export function start(canvas) {
     };
     g.state = 'end';
     endDrag = null;
+  }
+
+  // 高度の数値表示（▲=フィールド最高 / ●=現在地）。常時表示。
+  function drawHud(playerH, maxH) {
+    const top = 26;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '600 16px ui-monospace, "SF Mono", Menlo, monospace';
+    ctx.fillStyle = COL.peak;
+    ctx.fillText('▲ ' + altOf(maxH), W / 2, top);
+    ctx.fillStyle = '#26251f';
+    ctx.fillText('● ' + altOf(playerH), W / 2, top + 24);
+  }
+
+  function drawTriangle(x, y, s) {
+    ctx.beginPath();
+    ctx.moveTo(x, y - s);
+    ctx.lineTo(x + s * 0.9, y + s * 0.7);
+    ctx.lineTo(x - s * 0.9, y + s * 0.7);
+    ctx.closePath();
   }
 
   // ---- 描画: トップダウン（円窓） -----------------------------------------
@@ -297,6 +360,20 @@ export function start(canvas) {
       ctx.arc(mv.px, mv.py, 18, 0, TAU);
       ctx.fill();
     }
+
+    drawHud(g.terrain.height(g.px, g.py), g.field.max.h);
+
+    // タイトル（ready のときだけ）
+    if (g.state === 'ready') {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const size = Math.min(W, H) * 0.085;
+      ctx.font = `700 ${size}px ui-monospace, "SF Mono", Menlo, monospace`;
+      if ('letterSpacing' in ctx) ctx.letterSpacing = '0.28em';
+      ctx.fillStyle = 'rgba(38,37,31,0.88)';
+      ctx.fillText('TOPOPO', cx + size * 0.14, Math.max(size, cy - R - size * 0.7));
+      if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+    }
   }
 
   // ---- 描画: 斜め俯瞰のリプレイ（orbit可） -------------------------------
@@ -410,7 +487,29 @@ export function start(canvas) {
     ctx.arc(epr.sx, epr.sy, 7 * pulse, 0, TAU);
     ctx.fill();
 
+    // フィールド最高地点を強調（金色のビーコン）
+    const pk = g.field.max;
+    const pkr = project(pk.x, pk.y, pk.h);
+    const pkBase = project(pk.x, pk.y, e.gmin);
+    ctx.strokeStyle = 'rgba(200,146,10,0.55)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(pkBase.sx, pkBase.sy);
+    ctx.lineTo(pkr.sx, pkr.sy);
+    ctx.stroke();
+    const pp = (e.t % 1.4) / 1.4;
+    ctx.strokeStyle = `rgba(200,146,10,${0.6 * (1 - pp)})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(pkr.sx, pkr.sy, 6 + pp * 22, 0, TAU);
+    ctx.stroke();
+    ctx.fillStyle = COL.peak;
+    drawTriangle(pkr.sx, pkr.sy - 4, 8);
+    ctx.fill();
+
     if (masking) ctx.restore();
+
+    drawHud(ep.h, g.field.max.h);
 
     // 再挑戦を促す微かなパルス（イントロ後・言葉なし）
     if (e.t > 2.2) {
