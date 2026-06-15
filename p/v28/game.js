@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 45,           // 1ゲームの長さ(秒)
@@ -269,12 +269,8 @@ export function start(canvas) {
   function screenToWorld(sx, sy) {
     const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
     const R = Math.min(window.innerWidth, window.innerHeight) * 0.46;
-    const NORMAL = CFG.VIEW_RADIUS_WORLD;
-    const blend = clamp((game.viewR - NORMAL) / (CFG.ZOOM_MAX_R - NORMAL), 0, 1);
-    const camx = lerp(game.px, 0, blend), camy = lerp(game.py, 0, blend);
-    const frameR = lerp(NORMAL, CFG.FIELD_R * 1.07, blend);
-    const ppu = R / frameR;
-    return { x: camx + (sx - cx) / ppu, y: camy + (sy - cy) / ppu };
+    const ppu = R / game.viewR;
+    return { x: game.px + (sx - cx) / ppu, y: game.py + (sy - cy) / ppu };
   }
 
   // リザルト=ドラッグでorbit/タップで再挑戦。プレイ=タップでジップライン（所持時）
@@ -628,24 +624,19 @@ export function start(canvas) {
     const g = game;
     const cx = W / 2, cy = H / 2;
     const R = Math.min(W, H) * 0.46;
+    const VR = g.viewR;                       // 現在の視界半径(ピンチで変化)
     const ALWAYS = CFG.ALWAYS_R;               // 常に見える近距離バブル
     const N = CFG.GRID_N;
-    // 通常はプレイヤー中心、引きに応じてマップ中心へ。引き切るとマップ全域が枠に収まる
-    const NORMAL = CFG.VIEW_RADIUS_WORLD;
-    const blend = clamp((g.viewR - NORMAL) / (CFG.ZOOM_MAX_R - NORMAL), 0, 1);
-    const camx = lerp(g.px, 0, blend), camy = lerp(g.py, 0, blend);
-    const frameR = lerp(NORMAL, CFG.FIELD_R * 1.07, blend); // 画面に収める半径
-    const sightR = lerp(NORMAL, CFG.ZOOM_MAX_R, blend);     // プレイヤーが見通せる距離
-    const ppu = R / frameR;
-    const CELL = (2 * frameR) / (N - 1);
+    const CELL = (2 * VR) / (N - 1);           // ズームに応じて格子幅を変える(負荷一定)
+    const ppu = R / VR;
 
     ctx.fillStyle = COL.out;
     ctx.fillRect(0, 0, W, H);
 
     // ワールドに整列した格子をサンプリング（パン中もうねらない）
-    const ox0 = Math.floor((camx - frameR) / CELL) * CELL;
-    const oy0 = Math.floor((camy - frameR) / CELL) * CELL;
-    const nx = Math.ceil((2 * frameR) / CELL) + 2;
+    const ox0 = Math.floor((g.px - VR) / CELL) * CELL;
+    const oy0 = Math.floor((g.py - VR) / CELL) * CELL;
+    const nx = Math.ceil((2 * VR) / CELL) + 2;
     const ny = nx;
     let gmin = Infinity, gmax = -Infinity;
     for (let j = 0; j < ny; j++) {
@@ -657,10 +648,8 @@ export function start(canvas) {
         if (h > gmax) gmax = h;
       }
     }
-    const sxOf = (gx) => cx + (ox0 + gx * CELL - camx) * ppu;
-    const syOf = (gy) => cy + (oy0 + gy * CELL - camy) * ppu;
-    const wsx = (wx) => cx + (wx - camx) * ppu; // ワールド→画面
-    const wsy = (wy) => cy + (wy - camy) * ppu;
+    const sxOf = (gx) => cx + (ox0 + gx * CELL - g.px) * ppu;
+    const syOf = (gy) => cy + (oy0 + gy * CELL - g.py) * ppu;
 
     // 色なし。尾根谷度を5段階の明暗で塗る（谷=暗／尾根=明）。
     const drawTint = () => {
@@ -721,12 +710,12 @@ export function start(canvas) {
       for (let a = 0; a < RAYS; a++) {
         const th = (a / RAYS) * TAU;
         const dc = Math.cos(th), ds = Math.sin(th);
-        let rb = sightR;
+        let rb = VR;
         for (let k = 1; k <= STEPS; k++) {
-          const r = ALWAYS + (sightR - ALWAYS) * (k / STEPS);
+          const r = ALWAYS + (VR - ALWAYS) * (k / STEPS);
           if (g.terrain.height(g.px + dc * r, g.py + ds * r) > thresh) { rb = r; break; }
         }
-        poly.push([wsx(g.px + dc * rb), wsy(g.py + ds * rb)]);
+        poly.push([cx + dc * rb * ppu, cy + ds * rb * ppu]);
       }
     }
 
@@ -776,7 +765,7 @@ export function start(canvas) {
     const visibleAt = (wx, wy) => {
       const dx = wx - g.px, dy = wy - g.py;
       const d = Math.hypot(dx, dy);
-      if (d >= sightR) return false;
+      if (d >= VR) return false;
       if (!occlude) return true;
       const limit = d * 0.9;
       if (limit <= ALWAYS) return true;
@@ -792,7 +781,7 @@ export function start(canvas) {
     // アイテム（未取得・視界内のみ表示）
     for (const it of g.pickups) {
       if (it.taken || !visibleAt(it.x, it.y)) continue;
-      const sx = wsx(it.x), sy = wsy(it.y);
+      const sx = cx + (it.x - g.px) * ppu, sy = cy + (it.y - g.py) * ppu;
       ctx.strokeStyle = `rgba(31,138,138,${0.5 * (1 - itemPulse)})`;
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -813,8 +802,8 @@ export function start(canvas) {
     // NPC（視界内）。プレイヤーを追っている個体はアクセントで警告
     for (const n of g.npcs) {
       const ddx = n.x - g.px, ddy = n.y - g.py;
-      if (Math.hypot(ddx, ddy) >= sightR) continue;
-      const sx = wsx(n.x), sy = wsy(n.y);
+      if (Math.hypot(ddx, ddy) >= VR) continue;
+      const sx = cx + ddx * ppu, sy = cy + ddy * ppu;
       if (n.down > 0) {
         // 撃破され転落／放心中：薄く＋クルクル回る棒＋回復リング
         ctx.globalAlpha = 0.5;
@@ -862,12 +851,12 @@ export function start(canvas) {
 
     // ジップラインのワイヤー（移動中）
     if (g.riding) {
-      const tx = wsx(g.riding.tx), ty = wsy(g.riding.ty);
+      const tx = cx + (g.riding.tx - g.px) * ppu, ty = cy + (g.riding.ty - g.py) * ppu;
       ctx.strokeStyle = COL.item;
       ctx.lineWidth = 2;
       ctx.setLineDash([2, 4]);
       ctx.beginPath();
-      ctx.moveTo(wsx(g.px), wsy(g.py));
+      ctx.moveTo(cx, cy);
       ctx.lineTo(tx, ty);
       ctx.stroke();
       ctx.setLineDash([]);
@@ -880,7 +869,7 @@ export function start(canvas) {
     // 最高地点：ゴーグル所持時のみ、視界に入っていればマーク
     const pk = g.field.max;
     if (g.items.goggle && visibleAt(pk.x, pk.y)) {
-      const sxp = wsx(pk.x), syp = wsy(pk.y);
+      const sxp = cx + (pk.x - g.px) * ppu, syp = cy + (pk.y - g.py) * ppu;
       ctx.strokeStyle = `rgba(200,146,10,${0.7 * (1 - itemPulse)})`;
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -893,7 +882,7 @@ export function start(canvas) {
 
     // フィールド境界（世界の縁）。外側を陰らせ、縁を線で示す
     {
-      const bx = wsx(0), by = wsy(0);
+      const bx = cx + (0 - g.px) * ppu, by = cy + (0 - g.py) * ppu;
       const br = g.field.r * ppu;
       ctx.beginPath();
       ctx.rect(cx - R, cy - R, 2 * R, 2 * R);
@@ -950,54 +939,57 @@ export function start(canvas) {
       ctx.stroke();
     }
 
-    // プレイヤー（通常は中央。引き時はマップ上の実位置に）。転落中はアクセント色＆回転
+    // プレイヤー（中央固定）。転落中は操作不能を表すアクセント色＆回転
     const mv = input.read();
-    const psx = wsx(g.px), psy = wsy(g.py);
     const falling = !!g.fall;
     const stunned = g.stun > 0;
     const pulse = g.state === 'ready' ? 1 + 0.12 * Math.sin(g.readyPulse * 4) : 1;
     ctx.fillStyle = (falling || stunned) ? COL.accent : '#26251f';
     ctx.beginPath();
-    ctx.arc(psx, psy, 7 * pulse, 0, TAU);
+    ctx.arc(cx, cy, 7 * pulse, 0, TAU);
     ctx.fill();
     ctx.strokeStyle = (falling || stunned) ? 'rgba(224,81,46,0.4)' : 'rgba(38,37,31,0.35)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.arc(psx, psy, 13 * pulse, 0, TAU);
+    ctx.arc(cx, cy, 13 * pulse, 0, TAU);
     ctx.stroke();
     if (stunned) {
+      // 放心：回復までの減っていくリング（操作不能の合図）
       const frac = clamp(g.stun / (g.stunMax || 1), 0, 1);
       ctx.strokeStyle = COL.accent;
       ctx.lineWidth = 2.5;
       ctx.beginPath();
-      ctx.arc(psx, psy, 17, -Math.PI / 2, -Math.PI / 2 + frac * TAU);
+      ctx.arc(cx, cy, 17, -Math.PI / 2, -Math.PI / 2 + frac * TAU);
       ctx.stroke();
     } else if (falling) {
+      // ぐるぐる回る短い棒＝制御不能の合図
       const ang = g.time * 16;
       ctx.strokeStyle = COL.accent;
       ctx.lineWidth = 2.5;
       ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.moveTo(psx - Math.cos(ang) * 12, psy - Math.sin(ang) * 12);
-      ctx.lineTo(psx + Math.cos(ang) * 12, psy + Math.sin(ang) * 12);
+      ctx.moveTo(cx - Math.cos(ang) * 12, cy - Math.sin(ang) * 12);
+      ctx.lineTo(cx + Math.cos(ang) * 12, cy + Math.sin(ang) * 12);
       ctx.stroke();
     } else if (g.curSpeed > 0.001) {
+      // 進行方向の線。長さ＝実速度（急登でゆっくり=短い／下りで加速=長い）
       const len = lerp(10, 44, clamp(g.curSpeed / CFG.SPEED_MAX, 0, 1));
       ctx.strokeStyle = '#26251f';
       ctx.lineWidth = 2.5;
       ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.moveTo(psx, psy);
-      ctx.lineTo(psx + g.moveDir.x * (7 + len), psy + g.moveDir.y * (7 + len));
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + g.moveDir.x * (7 + len), cy + g.moveDir.y * (7 + len));
       ctx.stroke();
     }
 
     if (g.flash > 0) {
+      // 自己記録更新の演出
       const fr = 1 - g.flash / 0.7;
       ctx.strokeStyle = `rgba(224,81,46,${0.75 * (1 - fr)})`;
       ctx.lineWidth = 2.5;
       ctx.beginPath();
-      ctx.arc(psx, psy, 10 + fr * 36, 0, TAU);
+      ctx.arc(cx, cy, 10 + fr * 36, 0, TAU);
       ctx.stroke();
     }
 
@@ -1006,7 +998,7 @@ export function start(canvas) {
       ctx.strokeStyle = `rgba(38,37,31,${0.45 * (1 - pr)})`;
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(psx, psy, 13 + pr * 40, 0, TAU);
+      ctx.arc(cx, cy, 13 + pr * 40, 0, TAU);
       ctx.stroke();
     }
 
