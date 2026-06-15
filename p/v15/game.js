@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -27,23 +27,17 @@ const CFG = {
   ZIP_SPEED: 300,         // ジップライン移動の等速(ワールド単位/秒)
   ZIP_ARRIVE: 6,          // 到着判定の距離
   SLOPE_AVG_DIST: 45,     // 速度を決める傾斜の平均距離(進行方向の±これ)
-  FALL_SLOPE: 0.0034,     // これより急で「登っていない」と滑り落ちる
-  CLIMB_MAX: 0.0048,      // これより急だと押していても登れず転落
-  FALL_RECOVER: 0.0022,   // これより緩くなれば踏ん張りを取り戻す
-  FALL_ACCEL: 220000,     // 転落の加速(傾斜に比例)
-  FALL_DRAG: 3,           // 転落の減衰(/秒)
-  GLOVE_FALL_MUL: 2.6,    // グローブ装備で転落しにくくなる倍率
 };
 
 const ITEM_TYPES = ['glove', 'goggle', 'zip'];
 const RV_BLUR = 12; // 尾根谷度の近傍半径(セル数。広いほどマダラが減る)
-// 尾根谷度を5段階の明暗で。谷(暗)→尾根(明)。
-const GRAY5 = [
-  [128, 124, 116],
-  [165, 161, 152],
-  [197, 193, 185],
-  [224, 221, 214],
-  [246, 244, 239],
+// 尾根谷度を5段階に。谷(暗)→尾根(明)。spは線間隔(px)、crossでクロスハッチ。
+const HATCH = [
+  { sp: 3.8, cross: true },   // 0 谷=最も暗い
+  { sp: 6.0, cross: true },   // 1
+  { sp: 5.5, cross: false },  // 2
+  { sp: 9.0, cross: false },  // 3
+  { sp: 0, cross: false },    // 4 尾根=白(ハッチ無し)
 ];
 
 // セパラブルなボックスぼかし（src→dst、tmp は作業用）
@@ -221,7 +215,6 @@ export function start(canvas) {
       zipCharges: 0,        // ジップラインの残り使用回数(取得ごとに+1)
       pickups: spawnItems(CFG.FIELD_R),
       riding: null,         // ジップライン移動中の目標 {tx,ty}
-      fall: null,           // 転落中の速度 {vx,vy}（操作不能）
       curSpeed: 0,          // 現在の速度係数(描画の線長に使用)
       moveDir: { x: 0, y: 0 },
       path: [{ x: 0, y: 0, h: terrain.height(0, 0) }],
@@ -255,11 +248,8 @@ export function start(canvas) {
       const dy = e.clientY - endDrag.y;
       if (Math.abs(dx) + Math.abs(dy) > 6) endDrag.moved = true;
       const cam = game.end.cam;
-      const dyaw = -dx * 0.006; // 左右反転
-      cam.yaw += dyaw;
-      endDrag.vyaw = dyaw;      // 慣性用に直近の回転量を保持
+      cam.yaw += dx * 0.006;
       cam.tiltOff = clamp(cam.tiltOff - dy * 0.004, -0.45, 0.5);
-      cam.yawVel = 0;
       cam.touched = true;
       endDrag.x = e.clientX;
       endDrag.y = e.clientY;
@@ -270,7 +260,6 @@ export function start(canvas) {
   window.addEventListener('pointerup', () => {
     if (game.state === 'end' && endDrag) {
       if (!endDrag.moved && game.end.t > 2.2) newGame();
-      else if (endDrag.moved) game.end.cam.yawVel = (endDrag.vyaw || 0) * 16; // 慣性
       endDrag = null;
     } else if (tapInfo) {
       // 動かさない短いタップ＝ジップライン展開（残回数があり、円の視界内のみ）
@@ -322,36 +311,9 @@ export function start(canvas) {
         else { g.px += (dx / d) * step; g.py += (dy / d) * step; }
         g.curSpeed = CFG.ZIP_SPEED / CFG.BASE_SPEED; // 速い＝最長
         moved = true;
-      } else if (g.fall) {
-        // 転落中：操作不能。下り方向(=勾配の逆)へ加速しながら滑り落ちる
-        g.terrain.gradient(g.px, g.py, grad);
-        const steep = Math.hypot(grad.x, grad.y);
-        if (steep > 1e-6) {
-          const a = CFG.FALL_ACCEL * steep * dt;
-          g.fall.vx += (-grad.x / steep) * a;
-          g.fall.vy += (-grad.y / steep) * a;
-        }
-        g.fall.vx -= g.fall.vx * CFG.FALL_DRAG * dt;
-        g.fall.vy -= g.fall.vy * CFG.FALL_DRAG * dt;
-        g.px += g.fall.vx * dt;
-        g.py += g.fall.vy * dt;
-        const spd = Math.hypot(g.fall.vx, g.fall.vy);
-        if (spd > 1e-4) { g.moveDir.x = g.fall.vx / spd; g.moveDir.y = g.fall.vy / spd; }
-        g.curSpeed = spd / CFG.BASE_SPEED;
-        if (steep < CFG.FALL_RECOVER && spd < 70) g.fall = null; // 緩斜面で踏ん張り回復
-        moved = true;
       } else {
         const mv = input.read();
-        // 転落判定：急すぎる／急斜面で登っていない なら転がり落ちる
-        g.terrain.gradient(g.px, g.py, grad);
-        const steep = Math.hypot(grad.x, grad.y);
-        const mul = g.items.glove ? CFG.GLOVE_FALL_MUL : 1;
-        const fallS = CFG.FALL_SLOPE * mul, climbMax = CFG.CLIMB_MAX * mul;
-        const climbing = mv.mag > 0.25 && (grad.x * mv.x + grad.y * mv.y) > 0; // 上りへ踏ん張る
-        if (steep > climbMax || (steep > fallS && !climbing)) {
-          g.fall = { vx: 0, vy: 0 };
-          moved = true;
-        } else if (mv.mag > 0) {
+        if (mv.mag > 0) {
           // 進行方向の±一定距離の平均勾配（瞬間の凹凸でガタつかせない）
           const D = CFG.SLOPE_AVG_DIST;
           const hA = g.terrain.height(g.px + mv.x * D, g.py + mv.y * D);
@@ -390,18 +352,8 @@ export function start(canvas) {
     }
     if (g.state === 'end') {
       g.end.t += dt;
-      const cam = g.end.cam;
-      // ピンチ/ホイールで少し拡大
-      const zr = input.consumeZoomReq();
-      if (zr !== 0) cam.zoom = clamp(cam.zoom * (zr > 0 ? 1.15 : 1 / 1.15), 0.7, 1.9);
-      // 慣性（フリックで回り続けて減衰）
-      if (!endDrag) {
-        cam.yaw += cam.yawVel * dt;
-        cam.yawVel *= Math.exp(-dt * 2.2);
-        if (Math.abs(cam.yawVel) < 0.0005) cam.yawVel = 0;
-      }
       // 未操作なら、イントロ後にゆっくり自動オービット
-      if (!cam.touched && g.end.t > 3.0) cam.yaw += 0.09 * dt;
+      if (!g.end.cam.touched && g.end.t > 3.0) g.end.cam.yaw += 0.09 * dt;
     }
   }
 
@@ -460,7 +412,7 @@ export function start(canvas) {
         x1: Float32Array.from(sx1), y1: Float32Array.from(sy1),
         h: Float32Array.from(sh), n: sh.length,
       },
-      cam: { yaw: 0, yawVel: 0, zoom: 1, tiltOff: 0, touched: false },
+      cam: { yaw: 0, tiltOff: 0, touched: false },
     };
     g.state = 'end';
     endDrag = null;
@@ -519,7 +471,7 @@ export function start(canvas) {
     const sxOf = (gx) => cx + (ox0 + gx * CELL - g.px) * ppu;
     const syOf = (gy) => cy + (oy0 + gy * CELL - g.py) * ppu;
 
-    // 色なし。尾根谷度を5段階の明暗で塗る（谷=暗／尾根=明）。
+    // 色なし。尾根谷度を5段階に分け、段ごとにハッチング（谷=密なクロス／尾根=白）。
     const drawTint = () => {
       boxBlur(grid, nx, ny, RV_BLUR, gridT, gridB);
       let maxAbs = 1e-4;
@@ -530,13 +482,21 @@ export function start(canvas) {
         if (a > maxAbs) maxAbs = a;
       }
       const scale = 0.5 / Math.max(maxAbs, 0.02);
-      const M = clamp(Math.round(2 * R), 96, 360);
+      const M = clamp(Math.round(2 * R), 96, 460);
       shadeCanvas.width = M; shadeCanvas.height = M;
       const img = shadeCtx.createImageData(M, M);
       const d = img.data;
+      // 薄茶色・細線・カバレッジでアンチエイリアス
+      const CR = 150, CG = 118, CB = 84, AMAX = 150;
+      const halfW = 0.42, feather = 0.85; // 画面px
+      const covOf = (p, sp) => {
+        const dist = Math.min(p, sp - p);
+        return clamp(1 - (dist - halfW) / feather, 0, 1);
+      };
       for (let v = 0; v < M; v++) {
         const gyf = (v / (M - 1)) * (ny - 1);
         const j = gyf | 0, fj = gyf - j, j2 = Math.min(ny - 1, j + 1);
+        const wy = (oy0 + gyf * CELL) * ppu; // ワールド基準のスクリーン座標(パンでズレない)
         for (let u = 0; u < M; u++) {
           const gxf = (u / (M - 1)) * (nx - 1);
           const i = gxf | 0, fi = gxf - i, i2 = Math.min(nx - 1, i + 1);
@@ -544,13 +504,25 @@ export function start(canvas) {
                    + (gridRV[j2 * nx + i] * (1 - fi) + gridRV[j2 * nx + i2] * fi) * fj;
           let b = (clamp(0.5 + rv * scale, 0, 1) * 5) | 0;
           if (b > 4) b = 4;
-          const c = GRAY5[b];
+          const hb = HATCH[b];
+          let cov = 0;
+          if (hb.sp > 0) {
+            const wx = (ox0 + gxf * CELL) * ppu;
+            let p = ((wx + wy) * 0.70710678) % hb.sp; if (p < 0) p += hb.sp;
+            cov = covOf(p, hb.sp);
+            if (hb.cross) {
+              let q = ((wx - wy) * 0.70710678) % hb.sp; if (q < 0) q += hb.sp;
+              const c2 = covOf(q, hb.sp);
+              if (c2 > cov) cov = c2;
+            }
+          }
           const idx = (v * M + u) * 4;
-          d[idx] = c[0]; d[idx + 1] = c[1]; d[idx + 2] = c[2]; d[idx + 3] = 255;
+          if (cov > 0) { d[idx] = CR; d[idx + 1] = CG; d[idx + 2] = CB; d[idx + 3] = (cov * AMAX) | 0; }
+          else d[idx + 3] = 0;
         }
       }
       shadeCtx.putImageData(img, 0, 0);
-      ctx.imageSmoothingEnabled = true; // 境界をなめらかに
+      ctx.imageSmoothingEnabled = true; // 補間でさらに滑らかに
       ctx.drawImage(shadeCanvas, sxOf(0), syOf(0), (nx - 1) * CELL * ppu, (ny - 1) * CELL * ppu);
     };
 
@@ -739,30 +711,19 @@ export function start(canvas) {
       ctx.stroke();
     }
 
-    // プレイヤー（中央固定）。転落中は操作不能を表すアクセント色＆回転
+    // プレイヤー（中央固定）
     const mv = input.read();
-    const falling = !!g.fall;
     const pulse = g.state === 'ready' ? 1 + 0.12 * Math.sin(g.readyPulse * 4) : 1;
-    ctx.fillStyle = falling ? COL.accent : '#26251f';
+    ctx.fillStyle = '#26251f';
     ctx.beginPath();
     ctx.arc(cx, cy, 7 * pulse, 0, TAU);
     ctx.fill();
-    ctx.strokeStyle = falling ? 'rgba(224,81,46,0.4)' : 'rgba(38,37,31,0.35)';
+    ctx.strokeStyle = 'rgba(38,37,31,0.35)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.arc(cx, cy, 13 * pulse, 0, TAU);
     ctx.stroke();
-    if (falling) {
-      // ぐるぐる回る短い棒＝制御不能の合図
-      const ang = g.time * 16;
-      ctx.strokeStyle = COL.accent;
-      ctx.lineWidth = 2.5;
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.moveTo(cx - Math.cos(ang) * 12, cy - Math.sin(ang) * 12);
-      ctx.lineTo(cx + Math.cos(ang) * 12, cy + Math.sin(ang) * 12);
-      ctx.stroke();
-    } else if (g.curSpeed > 0.001) {
+    if (g.curSpeed > 0.001) {
       // 進行方向の線。長さ＝実速度（急登でゆっくり=短い／下りで加速=長い）
       const len = lerp(10, 44, clamp(g.curSpeed / CFG.SPEED_MAX, 0, 1));
       ctx.strokeStyle = '#26251f';
@@ -849,7 +810,7 @@ export function start(canvas) {
 
     const startScale = R / CFG.VIEW_RADIUS_WORLD;          // ゲーム中と同じ縮尺
     const fitScale = (Math.min(W, H) * 0.8) / (2 * half);
-    const scale = lerp(startScale, fitScale, k) * e.cam.zoom;
+    const scale = lerp(startScale, fitScale, k);
     const ep = g.path[g.path.length - 1];
     const ccx = lerp(ep.x, cx, k); // 視野中心: 到達点 → 領域中心
     const ccy = lerp(ep.y, cy, k);
