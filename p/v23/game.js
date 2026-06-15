@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -33,7 +33,7 @@ const CFG = {
   FALL_ACCEL: 220000,     // 転落の加速(傾斜に比例)
   FALL_DRAG: 3,           // 転落の減衰(/秒)
   GLOVE_FALL_MUL: 2.6,    // グローブ装備で転落しにくくなる倍率
-  NPC_COUNT: 5,           // NPCの数
+  NPC_COUNT: 10,          // NPCの数
   NPC_SPEED: 62,          // NPCの基礎速度(プレイヤーより遅い)
   NPC_AGGRO: 118,         // 索敵半径＝プレイヤー視界(235)の半分。先に気づかれにくい
   NPC_PUSH_R: 26,         // この距離で突き落とす
@@ -425,7 +425,6 @@ export function start(canvas) {
       }
       // NPC：広い範囲で高い所へ登る／プレイヤーが見えて近いと追跡し突き落とす
       let anyPush = false;
-      const playerH = g.terrain.height(g.px, g.py);
       for (const n of g.npcs) {
         if (n.down > 0) {
           // 撃破され転落中：操作不能でクルクル回りながら自然に滑り落ちる
@@ -442,18 +441,14 @@ export function start(canvas) {
         const dpx = g.px - n.x, dpy = g.py - n.y;
         const dp = Math.hypot(dpx, dpy);
         if (n.satT > 0) n.satT -= dt;
-        // 視線：自分の標高±3等高線の範囲だけ見える（高い尾根に遮られる／低地は見えない）
+        // 視線：自分より3等高線以上高い地形に遮られると見えない（満足中は追わない）
         let sees = false;
         if (n.satT <= 0 && dp < CFG.NPC_AGGRO && dp > 1e-3) {
-          const npcH = g.terrain.height(n.x, n.y);
-          const band = CFG.NPC_VISION_CONTOURS * CFG.CONTOUR_STEP;
-          if (playerH >= npcH - band) { // 自分より3等高線以上低い所は見えない
-            const thr = npcH + band;     // 3等高線以上高い地形の向こうも見えない
-            const ux = dpx / dp, uy = dpy / dp, lim = dp * 0.85;
-            sees = true;
-            for (let s = 1; s <= 12; s++) {
-              if (g.terrain.height(n.x + ux * (lim * s / 12), n.y + uy * (lim * s / 12)) > thr) { sees = false; break; }
-            }
+          const thr = g.terrain.height(n.x, n.y) + CFG.NPC_VISION_CONTOURS * CFG.CONTOUR_STEP;
+          const ux = dpx / dp, uy = dpy / dp, lim = dp * 0.85;
+          sees = true;
+          for (let s = 1; s <= 12; s++) {
+            if (g.terrain.height(n.x + ux * (lim * s / 12), n.y + uy * (lim * s / 12)) > thr) { sees = false; break; }
           }
         }
         if (sees) n.chaseT = CFG.NPC_CHASE_MEMORY; else if (n.chaseT > 0) n.chaseT -= dt;
