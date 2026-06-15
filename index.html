@@ -3,13 +3,71 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0a0d13" />
-  <title>TOPOPO</title>
-  <!-- 公開URLは常に最新のプロトタイプを表示する -->
-  <meta http-equiv="refresh" content="0; url=./p/01-contour/" />
-  <style>html,body{margin:0;height:100%;background:#0a0d13;}</style>
+  <meta name="theme-color" content="#f5f4ef" />
+  <title>TOPOPO — versions</title>
+  <style>
+    :root { --ink: #26251f; --sub: #8a877d; --line: #d9d7cf; --paper: #f5f4ef; --accent: #e0512e; --peak: #c8920a; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--paper); color: var(--ink); }
+    body {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      -webkit-font-smoothing: antialiased;
+      padding: max(28px, env(safe-area-inset-top)) 20px 60px;
+      max-width: 720px; margin: 0 auto;
+    }
+    header { margin: 12px 4px 26px; }
+    h1 { font-size: 34px; letter-spacing: 0.28em; margin: 0; font-weight: 700; }
+    header p { color: var(--sub); font-size: 13px; margin: 10px 0 0; letter-spacing: 0.02em; }
+    a.card {
+      display: block; text-decoration: none; color: inherit;
+      border: 1px solid var(--line); border-radius: 14px;
+      padding: 16px 18px; margin: 12px 0; background: #fbfbf8;
+      transition: transform .08s ease, border-color .15s ease;
+    }
+    a.card:active { transform: scale(0.99); }
+    a.card.latest { border-color: var(--ink); }
+    .row { display: flex; align-items: baseline; gap: 10px; }
+    .tag { font-size: 18px; font-weight: 700; }
+    .title { font-size: 15px; }
+    .badge {
+      margin-left: auto; font-size: 11px; letter-spacing: .1em;
+      color: var(--paper); background: var(--accent);
+      padding: 2px 8px; border-radius: 999px;
+    }
+    .date { color: var(--sub); font-size: 12px; }
+    .note { color: #4a483f; font-size: 13px; line-height: 1.6; margin: 9px 0 0; }
+    .play { color: var(--accent); font-size: 13px; margin-top: 10px; }
+    footer { color: var(--sub); font-size: 11px; margin: 30px 4px 0; line-height: 1.7; }
+  </style>
 </head>
 <body>
-  <script>location.replace('./p/01-contour/');</script>
+  <header>
+    <h1>TOPOPO</h1>
+    <p>等高線の地形を歩く実験。バージョン一覧。</p>
+  </header>
+  <main id="list">読み込み中…</main>
+  <footer>
+    各カードをタップでその版が遊べます（過去版は当時のまま凍結）。
+  </footer>
+
+  <script>
+    fetch('./versions.json')
+      .then((r) => r.json())
+      .then((vs) => {
+        document.getElementById('list').innerHTML = vs.map((v) => `
+          <a class="card ${v.latest ? 'latest' : ''}" href="${v.href}">
+            <div class="row">
+              <span class="tag">${v.v}</span>
+              <span class="title">${v.title}</span>
+              ${v.latest ? '<span class="badge">LATEST</span>' : '<span class="date" style="margin-left:auto">' + v.date + '</span>'}
+            </div>
+            ${v.latest ? '<div class="date" style="margin-top:6px">' + v.date + '</div>' : ''}
+            <p class="note">${v.note}</p>
+            <div class="play">▶ あそぶ</div>
+          </a>
+        `).join('');
+      })
+      .catch(() => { document.getElementById('list').textContent = 'versions.json を読み込めませんでした'; });
+  </script>
 </body>
 </html>
