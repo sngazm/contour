@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 60,           // 1ゲームの長さ(秒)
@@ -54,68 +54,6 @@ const RV_BLUR = 12; // 尾根谷度の近傍半径(セル数。広いほどマ�
 // 高度カラー(4色): 下から 青→緑→黄土→白。しきいは高さ0..1。
 const ALT4 = [[58, 108, 162], [104, 156, 86], [184, 150, 78], [240, 238, 230]];
 const ALT_TH = [0.15, 0.24, 0.35];
-
-// ---- リザルト地形用 WebGL2 シェーダー（ピクセル単位で色帯＋等高線＋AA）----
-const VERT_SRC = `#version 300 es
-in vec2 aPos; in float aH; in float aRV;
-uniform vec2 uCam, uYaw, uTilt, uOrigin, uView;
-uniform float uScale, uZ, uDepth;
-out float vH; out float vRV;
-void main(){
-  float X = aPos.x - uCam.x, Y = aPos.y - uCam.y;
-  float rx = X*uYaw.x - Y*uYaw.y;
-  float ry = X*uYaw.y + Y*uYaw.x;
-  float Z = aH * uZ;
-  float sx = uOrigin.x + rx*uScale;
-  float sy = uOrigin.y + ry*uScale*uTilt.x - Z*uScale*uTilt.y;
-  vH = aH; vRV = aRV;
-  gl_Position = vec4(sx/uView.x*2.0 - 1.0, 1.0 - sy/uView.y*2.0, -ry*uDepth, 1.0);
-}`;
-const FRAG_SRC = `#version 300 es
-precision highp float;
-in float vH; in float vRV;
-out vec4 frag;
-uniform vec3 uC0, uC1, uC2, uC3, uTH;
-uniform float uShadeLo, uShadeHi, uRvScale, uStep;
-void main(){
-  float h = vH;
-  float w = fwidth(h);
-  vec3 c = uC0;
-  c = mix(c, uC1, smoothstep(uTH.x - w, uTH.x + w, h));
-  c = mix(c, uC2, smoothstep(uTH.y - w, uTH.y + w, h));
-  c = mix(c, uC3, smoothstep(uTH.z - w, uTH.z + w, h));
-  float shade = uShadeLo + (uShadeHi - uShadeLo) * clamp(0.5 + vRV*uRvScale, 0.0, 1.0);
-  c *= shade;
-  float lp = fract(h / uStep);
-  float dd = min(lp, 1.0 - lp) * uStep;
-  float line = 1.0 - smoothstep(0.0, max(w, 1e-5) * 0.9, dd);
-  c = mix(c, c * 0.5, line * 0.5);
-  frag = vec4(c, 1.0);
-}`;
-function setupGL(gl) {
-  const mk = (type, src) => {
-    const s = gl.createShader(type);
-    gl.shaderSource(s, src); gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.warn(gl.getShaderInfoLog(s)); return null; }
-    return s;
-  };
-  const vs = mk(gl.VERTEX_SHADER, VERT_SRC), fs = mk(gl.FRAGMENT_SHADER, FRAG_SRC);
-  if (!vs || !fs) return null;
-  const prog = gl.createProgram();
-  gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { console.warn(gl.getProgramInfoLog(prog)); return null; }
-  const U = (n) => gl.getUniformLocation(prog, n);
-  return {
-    prog, vbo: gl.createBuffer(), ibo: gl.createBuffer(),
-    aPos: gl.getAttribLocation(prog, 'aPos'), aH: gl.getAttribLocation(prog, 'aH'), aRV: gl.getAttribLocation(prog, 'aRV'),
-    u: {
-      cam: U('uCam'), yaw: U('uYaw'), tilt: U('uTilt'), origin: U('uOrigin'), view: U('uView'),
-      scale: U('uScale'), z: U('uZ'), depth: U('uDepth'),
-      c0: U('uC0'), c1: U('uC1'), c2: U('uC2'), c3: U('uC3'), th: U('uTH'),
-      shadeLo: U('uShadeLo'), shadeHi: U('uShadeHi'), rvScale: U('uRvScale'), step: U('uStep'),
-    },
-  };
-}
 const SHADE_LO = 0.68; // 谷の暗さ
 const SHADE_HI = 1.16; // 尾根の明るさ
 
@@ -298,9 +236,6 @@ export function start(canvas) {
   const fillPX = new Float32Array(120 * 120); // リザルト塗りの頂点投影バッファ
   const fillPY = new Float32Array(120 * 120);
   const fillPD = new Float32Array(120 * 120);
-  const glCanvas = document.createElement('canvas'); // リザルト地形の WebGL 描画先
-  const gl = glCanvas.getContext('webgl2', { antialias: true, alpha: true, premultipliedAlpha: false });
-  const glR = gl ? setupGL(gl) : null;
 
   let game;
   // リザルトのカメラ操作（1本指=orbit / 2本指=ズーム / タップ=再挑戦）
@@ -689,35 +624,7 @@ export function start(canvas) {
         h: Float32Array.from(sh), n: sh.length,
       },
       cam: { yaw: 0, yawVel: 0, zoom: 1, tiltOff: 0, touched: false },
-      glCount: 0,
     };
-    // WebGL 用メッシュをアップロード（頂点= worldX,worldY,height,rv / 三角形インデックス）
-    if (glR) {
-      const verts = new Float32Array(CX * RY * 4);
-      for (let r = 0; r < RY; r++) {
-        for (let c = 0; c < CX; c++) {
-          const i = r * CX + c, o = i * 4;
-          verts[o] = cx - half + (2 * half) * (c / (CX - 1));
-          verts[o + 1] = cy - half + (2 * half) * (r / (RY - 1));
-          verts[o + 2] = heights[i];
-          verts[o + 3] = rv[i];
-        }
-      }
-      const idx = new Uint16Array((CX - 1) * (RY - 1) * 6);
-      let p = 0;
-      for (let r = 0; r + 1 < RY; r++) {
-        for (let c = 0; c + 1 < CX; c++) {
-          const a = r * CX + c, b = a + 1, d = (r + 1) * CX + c, e2 = d + 1;
-          idx[p++] = a; idx[p++] = d; idx[p++] = b;
-          idx[p++] = b; idx[p++] = d; idx[p++] = e2;
-        }
-      }
-      gl.bindBuffer(gl.ARRAY_BUFFER, glR.vbo);
-      gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, glR.ibo);
-      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
-      g.end.glCount = idx.length;
-    }
     g.state = 'end';
     endPointers.clear();
     endGesture = null;
@@ -1242,44 +1149,6 @@ export function start(canvas) {
       };
     };
 
-    const useGL = glR && e.glCount > 0;
-    if (useGL) {
-      // WebGL でリザルト地形をピクセル単位に塗る（色帯＋等高線＋AA）
-      if (glCanvas.width !== canvas.width || glCanvas.height !== canvas.height) {
-        glCanvas.width = canvas.width; glCanvas.height = canvas.height;
-      }
-      const u = glR.u;
-      gl.viewport(0, 0, glCanvas.width, glCanvas.height);
-      gl.clearColor(0, 0, 0, 0);
-      gl.enable(gl.DEPTH_TEST);
-      gl.depthFunc(gl.LEQUAL);
-      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-      gl.useProgram(glR.prog);
-      gl.bindBuffer(gl.ARRAY_BUFFER, glR.vbo);
-      gl.enableVertexAttribArray(glR.aPos); gl.vertexAttribPointer(glR.aPos, 2, gl.FLOAT, false, 16, 0);
-      gl.enableVertexAttribArray(glR.aH); gl.vertexAttribPointer(glR.aH, 1, gl.FLOAT, false, 16, 8);
-      gl.enableVertexAttribArray(glR.aRV); gl.vertexAttribPointer(glR.aRV, 1, gl.FLOAT, false, 16, 12);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, glR.ibo);
-      gl.uniform2f(u.cam, ccx, ccy);
-      gl.uniform2f(u.yaw, cyaw, syaw);
-      gl.uniform2f(u.tilt, ct, st);
-      gl.uniform2f(u.origin, ox, oy);
-      gl.uniform2f(u.view, W, H);
-      gl.uniform1f(u.scale, scale);
-      gl.uniform1f(u.z, HEIGHT_SCALE * EXAG);
-      gl.uniform1f(u.depth, 1 / (depthHalf * 2.2));
-      gl.uniform3f(u.c0, ALT4[0][0] / 255, ALT4[0][1] / 255, ALT4[0][2] / 255);
-      gl.uniform3f(u.c1, ALT4[1][0] / 255, ALT4[1][1] / 255, ALT4[1][2] / 255);
-      gl.uniform3f(u.c2, ALT4[2][0] / 255, ALT4[2][1] / 255, ALT4[2][2] / 255);
-      gl.uniform3f(u.c3, ALT4[3][0] / 255, ALT4[3][1] / 255, ALT4[3][2] / 255);
-      gl.uniform3f(u.th, ALT_TH[0], ALT_TH[1], ALT_TH[2]);
-      gl.uniform1f(u.shadeLo, SHADE_LO);
-      gl.uniform1f(u.shadeHi, SHADE_HI);
-      gl.uniform1f(u.rvScale, e.rvScale);
-      gl.uniform1f(u.step, CFG.CONTOUR_STEP);
-      gl.drawElements(gl.TRIANGLES, e.glCount, gl.UNSIGNED_SHORT, 0);
-    }
-
     // イントロ序盤は円窓が開いていくように見せる
     const diag = Math.hypot(W, H);
     const maskR = lerp(R, diag, easeOut(clamp(e.t / 0.8, 0, 1)));
@@ -1291,12 +1160,8 @@ export function start(canvas) {
       ctx.clip();
     }
 
-    if (useGL) {
-      ctx.drawImage(glCanvas, 0, 0, W, H); // GL で塗った地形を貼る
-    }
-
-    // 地形を高度カラー＋尾根谷度の陰影で塗る（GL不可時のフォールバック・奥行きソート面）
-    if (!useGL) {
+    // 地形を高度カラー＋尾根谷度の陰影で塗る（奥行きソートした面で）
+    {
       const H4 = e.heights, CXr = e.CX, RYr = e.RY, rvg = e.rv, rvs = e.rvScale;
       for (let r = 0; r < RYr; r++) {
         const wy = cy - half + (2 * half) * (r / (RYr - 1));
@@ -1333,29 +1198,27 @@ export function start(canvas) {
       }
     }
 
-    // 等高線（GL不可時のみ。GL使用時はシェーダーが等高線も描く）
-    if (!useGL) {
-      const BANDS = 8;
-      const paths = [];
-      for (let i = 0; i < BANDS; i++) paths.push(new Path2D());
-      const s = e.seg;
-      for (let i = 0; i < s.n; i++) {
-        const a = project(s.x0[i], s.y0[i], s.h[i]);
-        const b = project(s.x1[i], s.y1[i], s.h[i]);
-        const depthN = clamp(((a.ry + b.ry) * 0.5 / depthHalf) * 0.5 + 0.5, 0, 1);
-        const band = clamp((depthN * BANDS) | 0, 0, BANDS - 1);
-        paths[band].moveTo(a.sx, a.sy);
-        paths[band].lineTo(b.sx, b.sy);
-      }
-      ctx.globalCompositeOperation = 'multiply';
-      ctx.lineWidth = 1;
-      for (let band = 0; band < BANDS; band++) {
-        const gray = Math.round(lerp(210, 55, (band + 0.5) / BANDS));
-        ctx.strokeStyle = `rgb(${gray},${gray},${gray})`;
-        ctx.stroke(paths[band]);
-      }
-      ctx.globalCompositeOperation = 'source-over';
+    // 等高線を奥行きで濃淡分け（multiplyで前後の見え方を出す）
+    const BANDS = 8;
+    const paths = [];
+    for (let i = 0; i < BANDS; i++) paths.push(new Path2D());
+    const s = e.seg;
+    for (let i = 0; i < s.n; i++) {
+      const a = project(s.x0[i], s.y0[i], s.h[i]);
+      const b = project(s.x1[i], s.y1[i], s.h[i]);
+      const depthN = clamp(((a.ry + b.ry) * 0.5 / depthHalf) * 0.5 + 0.5, 0, 1);
+      const band = clamp((depthN * BANDS) | 0, 0, BANDS - 1);
+      paths[band].moveTo(a.sx, a.sy);
+      paths[band].lineTo(b.sx, b.sy);
     }
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.lineWidth = 1;
+    for (let band = 0; band < BANDS; band++) {
+      const gray = Math.round(lerp(210, 55, (band + 0.5) / BANDS)); // 奥=薄 手前=濃
+      ctx.strokeStyle = `rgb(${gray},${gray},${gray})`;
+      ctx.stroke(paths[band]);
+    }
+    ctx.globalCompositeOperation = 'source-over';
 
     // 軌跡
     ctx.strokeStyle = COL.accent;
