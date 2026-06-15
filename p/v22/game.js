@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -64,7 +64,7 @@ function spawnNpcs(R) {
   for (let i = 0; i < CFG.NPC_COUNT; i++) {
     const a = Math.random() * TAU;
     const r = 260 + Math.random() * (R - 320);
-    list.push({ x: Math.cos(a) * r, y: Math.sin(a) * r, chaseT: 0, satT: 0, down: 0, goal: null, goalT: 0, dx: 0, dy: 0, fvx: 0, fvy: 0 });
+    list.push({ x: Math.cos(a) * r, y: Math.sin(a) * r, chaseT: 0, satT: 0, down: 0, goal: null, goalT: 0 });
   }
   return list;
 }
@@ -426,18 +426,7 @@ export function start(canvas) {
       // NPC：広い範囲で高い所へ登る／プレイヤーが見えて近いと追跡し突き落とす
       let anyPush = false;
       for (const n of g.npcs) {
-        if (n.down > 0) {
-          // 撃破され転落中：操作不能でクルクル回りながら自然に滑り落ちる
-          n.down -= dt;
-          g.terrain.gradient(n.x, n.y, grad);
-          const st = Math.hypot(grad.x, grad.y);
-          if (st > 1e-6) { const a = CFG.FALL_ACCEL * st * dt; n.fvx += (-grad.x / st) * a; n.fvy += (-grad.y / st) * a; }
-          n.fvx -= n.fvx * CFG.FALL_DRAG * dt; n.fvy -= n.fvy * CFG.FALL_DRAG * dt;
-          n.x += n.fvx * dt; n.y += n.fvy * dt;
-          const nd2 = Math.hypot(n.x, n.y);
-          if (nd2 > g.field.r) { n.x *= g.field.r / nd2; n.y *= g.field.r / nd2; n.fvx *= 0.3; n.fvy *= 0.3; }
-          continue;
-        }
+        if (n.down > 0) { n.down -= dt; continue; } // 撃破された放心中は無効
         const dpx = g.px - n.x, dpy = g.py - n.y;
         const dp = Math.hypot(dpx, dpy);
         if (n.satT > 0) n.satT -= dt;
@@ -483,16 +472,13 @@ export function start(canvas) {
         const f = clamp(1 - along * CFG.UPHILL_K, 0.3, 1.4);
         const sp = CFG.NPC_SPEED * f * dt;
         n.x += dirx * sp; n.y += diry * sp;
-        if (dirx || diry) { n.dx = dirx; n.dy = diry; } // 進行方向を保持(描画用)
         const nd = Math.hypot(n.x, n.y);
         if (nd > g.field.r) { n.x *= g.field.r / nd; n.y *= g.field.r / nd; }
-        // 接触：速度を乗せて突っ込めば撃破(転落+6秒放心)／そうでなければ突かれる
+        // 接触：速度を乗せて突っ込めば撃破(6秒放心)／そうでなければ突かれる
         if (dp < CFG.NPC_PUSH_R && !g.fall && g.stun <= 0) {
           const ux = dpx / (dp || 1), uy = dpy / (dp || 1);
           if (g.curSpeed > CFG.PLAYER_CHARGE) {
-            // 突き落とす：弾かれて転がり落ちる初速を与える
-            n.fvx = -ux * CFG.NPC_PUSH_SPEED; n.fvy = -uy * CFG.NPC_PUSH_SPEED;
-            n.down = CFG.NPC_DOWN; n.chaseT = 0;
+            n.x -= ux * 40; n.y -= uy * 40; n.down = CFG.NPC_DOWN; n.chaseT = 0;
           } else if (g.grace <= 0 && n.satT <= 0) {
             g.fall = { vx: ux * CFG.NPC_PUSH_SPEED, vy: uy * CFG.NPC_PUSH_SPEED, t: 0 };
             n.x -= ux * 30; n.y -= uy * 30;
@@ -789,39 +775,21 @@ export function start(canvas) {
       if (Math.hypot(ddx, ddy) >= VR) continue;
       const sx = cx + ddx * ppu, sy = cy + ddy * ppu;
       if (n.down > 0) {
-        // 撃破され転落／放心中：薄く＋クルクル回る棒＋回復リング
-        ctx.globalAlpha = 0.5;
+        // 撃破され放心中：薄く＋回復リング
+        ctx.globalAlpha = 0.45;
         ctx.fillStyle = '#46423b';
         ctx.beginPath();
-        ctx.arc(sx, sy, 5, 0, TAU);
+        ctx.arc(sx, sy, 5.5, 0, TAU);
         ctx.fill();
-        const ang = g.time * 16;
-        ctx.strokeStyle = 'rgba(38,37,31,0.5)';
-        ctx.lineWidth = 2;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(sx - Math.cos(ang) * 9, sy - Math.sin(ang) * 9);
-        ctx.lineTo(sx + Math.cos(ang) * 9, sy + Math.sin(ang) * 9);
-        ctx.stroke();
         ctx.globalAlpha = 1;
         ctx.strokeStyle = 'rgba(38,37,31,0.3)';
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.arc(sx, sy, 13, -Math.PI / 2, -Math.PI / 2 + clamp(n.down / CFG.NPC_DOWN, 0, 1) * TAU);
+        ctx.arc(sx, sy, 8, -Math.PI / 2, -Math.PI / 2 + clamp(n.down / CFG.NPC_DOWN, 0, 1) * TAU);
         ctx.stroke();
         continue;
       }
       const chasing = n.chaseT > 0;
-      // 進行方向の線
-      if (n.dx || n.dy) {
-        ctx.strokeStyle = chasing ? COL.accent : 'rgba(38,37,31,0.5)';
-        ctx.lineWidth = 2;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(sx, sy);
-        ctx.lineTo(sx + n.dx * 15, sy + n.dy * 15);
-        ctx.stroke();
-      }
       ctx.fillStyle = '#46423b';
       ctx.beginPath();
       ctx.arc(sx, sy, 5.5, 0, TAU);
