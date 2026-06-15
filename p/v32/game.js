@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 60,           // 1ゲームの長さ(秒)
@@ -40,7 +40,6 @@ const CFG = {
   NPC_AGGRO: 118,         // 索敵半径＝プレイヤー視界(235)の半分。先に気づかれにくい
   NPC_PUSH_R: 26,         // この距離で突き落とす
   NPC_PUSH_SPEED: 250,    // 突き落としの初速
-  BONUS_TIME: 6,          // ボーナス1個で延びる秒数
   NPC_VISION_CONTOURS: 3, // NPCは自分より これ×等高線 以上高い地形の向こうが見えない
   NPC_CHASE_MEMORY: 0.8,  // 見失ってから追跡を続ける秒数
   PLAYER_CHARGE: 1.15,    // この速度係数以上で突っ込むと逆にNPCを突き落とせる
@@ -54,21 +53,6 @@ const RV_BLUR = 12; // 尾根谷度の近傍半径(セル数。広いほどマ�
 // 高度カラー(4色): 下から 青→緑→黄土→白。しきいは高さ0..1。
 const ALT4 = [[58, 108, 162], [104, 156, 86], [184, 150, 78], [240, 238, 230]];
 const ALT_TH = [0.15, 0.24, 0.35];
-// リザルトの塗りは連続グラデ（グラフのように滑らかに）
-const RES_STOPS = [[0.04, [58, 108, 162]], [0.17, [104, 156, 86]], [0.28, [184, 150, 78]], [0.47, [240, 238, 230]]];
-function altSmooth(h, out) {
-  let s = RES_STOPS;
-  if (h <= s[0][0]) { out[0] = s[0][1][0]; out[1] = s[0][1][1]; out[2] = s[0][1][2]; return; }
-  for (let i = 1; i < s.length; i++) {
-    if (h <= s[i][0]) {
-      const t = (h - s[i - 1][0]) / (s[i][0] - s[i - 1][0]);
-      const a = s[i - 1][1], b = s[i][1];
-      out[0] = a[0] + (b[0] - a[0]) * t; out[1] = a[1] + (b[1] - a[1]) * t; out[2] = a[2] + (b[2] - a[2]) * t;
-      return;
-    }
-  }
-  const l = s[s.length - 1][1]; out[0] = l[0]; out[1] = l[1]; out[2] = l[2];
-}
 const SHADE_LO = 0.68; // 谷の暗さ
 const SHADE_HI = 1.16; // 尾根の明るさ
 
@@ -253,14 +237,7 @@ export function start(canvas) {
   const fillPD = new Float32Array(120 * 120);
 
   let game;
-  // リザルトのカメラ操作（1本指=orbit / 2本指=ズーム / タップ=再挑戦）
-  const endPointers = new Map();
-  let endGesture = null;
-  let pinchPrev = 0;
-  const endPinchDist = () => {
-    const v = [...endPointers.values()];
-    return v.length < 2 ? 0 : Math.hypot(v[0].x - v[1].x, v[0].y - v[1].y);
-  };
+  let endDrag = null; // リザルトでの orbit/タップ判定
 
   // 右下のレーダーボタン（所持時に表示）。押すと1回ズームアウトして偵察できる。
   const viewBtn = document.getElementById('viewbtn');
@@ -281,7 +258,6 @@ export function start(canvas) {
       field: { r: CFG.FIELD_R, max: findFieldMax(terrain, CFG.FIELD_R) },
       state: 'ready',
       time: 0,
-      timeLimit: CFG.DURATION,      // ボーナスで延びる
       far: false,                   // レーダー偵察中(ズームアウト)か
       viewR: CFG.VIEW_RADIUS_WORLD, // 現在の視界半径(補間用)
       px: 0, py: 0,
@@ -305,8 +281,7 @@ export function start(canvas) {
     };
     input.state.everPressed = false;
     input.state.zoomReq = 0;
-    endPointers.clear();
-    endGesture = null;
+    endDrag = null;
     if (viewBtn) viewBtn.style.display = 'none';
   }
   newGame();
@@ -323,54 +298,39 @@ export function start(canvas) {
     return { x: camx + (sx - cx) / ppu, y: camy + (sy - cy) / ppu };
   }
 
+  // リザルト=ドラッグでorbit/タップで再挑戦。プレイ=タップでジップライン（所持時）
+  let tapInfo = null;
   canvas.addEventListener('pointerdown', (e) => {
-    if (game.state !== 'end') return;
-    endPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (endPointers.size === 1) {
-      endGesture = { t0: performance.now(), moved: false, lastX: e.clientX, lastY: e.clientY, vyaw: 0 };
-    } else if (endPointers.size === 2) {
-      if (endGesture) endGesture.moved = true;
-      pinchPrev = endPinchDist();
-    }
+    if (game.state === 'end') endDrag = { x: e.clientX, y: e.clientY, moved: false };
+    else tapInfo = { x: e.clientX, y: e.clientY, t: performance.now(), moved: false };
   });
   canvas.addEventListener('pointermove', (e) => {
-    if (game.state !== 'end' || !endPointers.has(e.pointerId)) return;
-    endPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    const cam = game.end.cam;
-    if (endPointers.size >= 2) {
-      const d = endPinchDist();
-      if (pinchPrev > 0 && d > 0) cam.zoom = clamp(cam.zoom * (d / pinchPrev), 0.6, 2.4);
-      pinchPrev = d;
-      if (endGesture) endGesture.moved = true;
-    } else if (endGesture) {
-      const dx = e.clientX - endGesture.lastX, dy = e.clientY - endGesture.lastY;
-      if (Math.abs(dx) + Math.abs(dy) > 4) endGesture.moved = true;
-      const dyaw = -dx * 0.006;
-      cam.yaw += dyaw; cam.yawVel = 0; endGesture.vyaw = dyaw;
+    if (game.state === 'end' && endDrag) {
+      const dx = e.clientX - endDrag.x;
+      const dy = e.clientY - endDrag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 6) endDrag.moved = true;
+      const cam = game.end.cam;
+      const dyaw = -dx * 0.006; // 左右反転
+      cam.yaw += dyaw;
+      endDrag.vyaw = dyaw;      // 慣性用に直近の回転量を保持
       cam.tiltOff = clamp(cam.tiltOff - dy * 0.004, -0.45, 0.5);
+      cam.yawVel = 0;
       cam.touched = true;
-      endGesture.lastX = e.clientX; endGesture.lastY = e.clientY;
+      endDrag.x = e.clientX;
+      endDrag.y = e.clientY;
+    } else if (tapInfo) {
+      if (Math.hypot(e.clientX - tapInfo.x, e.clientY - tapInfo.y) > 8) tapInfo.moved = true;
     }
   });
-  window.addEventListener('pointerup', (e) => {
-    if (game.state !== 'end' || !endPointers.has(e.pointerId)) return;
-    endPointers.delete(e.pointerId);
-    if (endPointers.size === 0) {
-      if (endGesture && !endGesture.moved && performance.now() - endGesture.t0 < 350 && game.end.t > 2.2) newGame();
-      else if (endGesture) game.end.cam.yawVel = (endGesture.vyaw || 0) * 16; // フリック慣性
-      endGesture = null;
-    } else if (endPointers.size === 1) {
-      const rem = [...endPointers.values()][0];
-      if (endGesture) { endGesture.lastX = rem.x; endGesture.lastY = rem.y; }
-      pinchPrev = 0;
+  window.addEventListener('pointerup', () => {
+    if (game.state === 'end' && endDrag) {
+      if (!endDrag.moved && game.end.t > 2.2) newGame();
+      else if (endDrag.moved) game.end.cam.yawVel = (endDrag.vyaw || 0) * 16; // 慣性
+      endDrag = null;
+    } else if (tapInfo) {
+      tapInfo = null;
     }
   });
-  // PCのホイールでリザルトをズーム
-  canvas.addEventListener('wheel', (e) => {
-    if (game.state !== 'end') return;
-    e.preventDefault();
-    game.end.cam.zoom = clamp(game.end.cam.zoom * Math.exp(-e.deltaY * 0.0015), 0.6, 2.4);
-  }, { passive: false });
 
   // ---- 更新 ----------------------------------------------------------------
   function update(dt) {
@@ -471,7 +431,7 @@ export function start(canvas) {
           if (!it.taken && Math.hypot(g.px - it.x, g.py - it.y) < CFG.PICKUP_R) {
             it.taken = true;
             if (it.type === 'radar') g.radar += 1;
-            else if (it.type === 'boon') { g.bonus += 1; g.boonFlash = 0.8; g.timeLimit += CFG.BONUS_TIME; }
+            else if (it.type === 'boon') { g.bonus += 1; g.boonFlash = 0.8; }
           }
         }
       }
@@ -558,14 +518,17 @@ export function start(canvas) {
         }
       }
       if (anyPush) for (const n of g.npcs) { n.satT = CFG.NPC_SATISFIED; n.chaseT = 0; } // 全員満足
-      if (g.time >= g.timeLimit) beginEnd();
+      if (g.time >= CFG.DURATION) beginEnd();
       return;
     }
     if (g.state === 'end') {
       g.end.t += dt;
       const cam = g.end.cam;
-      // 慣性（フリックで回り続けて減衰）。指を置いていない時のみ
-      if (endPointers.size === 0) {
+      // ピンチ/ホイールで少し拡大
+      const zr = input.consumeZoomReq();
+      if (zr !== 0) cam.zoom = clamp(cam.zoom * (zr > 0 ? 1.15 : 1 / 1.15), 0.7, 1.9);
+      // 慣性（フリックで回り続けて減衰）
+      if (!endDrag) {
         cam.yaw += cam.yawVel * dt;
         cam.yawVel *= Math.exp(-dt * 2.2);
         if (Math.abs(cam.yawVel) < 0.0005) cam.yawVel = 0;
@@ -641,8 +604,7 @@ export function start(canvas) {
       cam: { yaw: 0, yawVel: 0, zoom: 1, tiltOff: 0, touched: false },
     };
     g.state = 'end';
-    endPointers.clear();
-    endGesture = null;
+    endDrag = null;
     if (viewBtn) viewBtn.style.display = 'none';
   }
 
@@ -666,21 +628,19 @@ export function start(canvas) {
     }
   }
 
-  // 左端の縦型・高度計（上端＝フィールド最高。4色スケール＋現在地/記録/目標）
+  // 左端の縦型・高度計（4色の段彩スケール＋現在地/記録/目標のマーカー）
   function drawAltMeter(curH, best, maxH) {
     const x = 16, w = 9;
-    const y0 = H * 0.72, y1 = H * 0.26; // 下=0, 上=最高(maxH)
-    const top = Math.max(maxH, 1e-3);
-    const at = (a) => y0 + (y1 - y0) * clamp(a / top, 0, 1);
-    const st = (a) => clamp(a / top, 0, 1); // 色スケールも maxH 基準
+    const y0 = H * 0.7, y1 = H * 0.28; // 下=0, 上=高
+    const at = (a) => y0 + (y1 - y0) * clamp(a, 0, 1);
     const grad = ctx.createLinearGradient(0, y0, 0, y1);
     grad.addColorStop(0, rgba(ALT4[0]));
-    grad.addColorStop(st(ALT_TH[0]), rgba(ALT4[0]));
-    grad.addColorStop(st(ALT_TH[0]), rgba(ALT4[1]));
-    grad.addColorStop(st(ALT_TH[1]), rgba(ALT4[1]));
-    grad.addColorStop(st(ALT_TH[1]), rgba(ALT4[2]));
-    grad.addColorStop(st(ALT_TH[2]), rgba(ALT4[2]));
-    grad.addColorStop(st(ALT_TH[2]), rgba(ALT4[3]));
+    grad.addColorStop(ALT_TH[0], rgba(ALT4[0]));
+    grad.addColorStop(ALT_TH[0], rgba(ALT4[1]));
+    grad.addColorStop(ALT_TH[1], rgba(ALT4[1]));
+    grad.addColorStop(ALT_TH[1], rgba(ALT4[2]));
+    grad.addColorStop(ALT_TH[2], rgba(ALT4[2]));
+    grad.addColorStop(ALT_TH[2], rgba(ALT4[3]));
     grad.addColorStop(1, rgba(ALT4[3]));
     ctx.fillStyle = grad;
     ctx.fillRect(x, y1, w, y0 - y1);
@@ -1006,8 +966,8 @@ export function start(canvas) {
 
     // 残り時間リング
     if (g.state === 'play') {
-      const remain = clamp(1 - g.time / g.timeLimit, 0, 1);
-      const warm = g.time / g.timeLimit > 0.8;
+      const remain = clamp(1 - g.time / CFG.DURATION, 0, 1);
+      const warm = g.time / CFG.DURATION > 0.8;
       ctx.lineWidth = 3;
       ctx.strokeStyle = warm ? COL.accent : 'rgba(40,39,35,0.45)';
       ctx.beginPath();
@@ -1186,30 +1146,31 @@ export function start(canvas) {
           fillPX[kk] = p.sx; fillPY[kk] = p.sy; fillPD[kk] = p.ry;
         }
       }
+      const S = 2;
       const cells = [];
-      for (let r = 0; r + 1 < RYr; r++) {
-        for (let c = 0; c + 1 < CXr; c++) {
+      for (let r = 0; r + S < RYr; r += S) {
+        for (let c = 0; c + S < CXr; c += S) {
           const k = r * CXr + c;
-          cells.push([(fillPD[k] + fillPD[k + 1] + fillPD[(r + 1) * CXr + c] + fillPD[(r + 1) * CXr + c + 1]) * 0.25, k, r, c]);
+          cells.push([(fillPD[k] + fillPD[k + S] + fillPD[(r + S) * CXr + c] + fillPD[(r + S) * CXr + c + S]) * 0.25, r, c]);
         }
       }
       cells.sort((a, b) => a[0] - b[0]); // 奥（ry小）から手前へ
-      const col = [0, 0, 0];
+      const mh = (S / 2) | 0;
       for (let ci = 0; ci < cells.length; ci++) {
-        const k = cells[ci][1], r = cells[ci][2], c = cells[ci][3];
-        const k10 = k + 1, k11 = (r + 1) * CXr + c + 1, k01 = (r + 1) * CXr + c;
-        altSmooth(H4[k], col); // 連続グラデで滑らかに
-        const shade = SHADE_LO + (SHADE_HI - SHADE_LO) * clamp(0.5 + rvg[k] * rvs, 0, 1);
-        const cs = `rgb(${Math.min(255, col[0] * shade) | 0},${Math.min(255, col[1] * shade) | 0},${Math.min(255, col[2] * shade) | 0})`;
-        ctx.fillStyle = cs; ctx.strokeStyle = cs; ctx.lineWidth = 1; // 同色stroke で継ぎ目を消す
+        const r = cells[ci][1], c = cells[ci][2];
+        const k00 = r * CXr + c, k10 = r * CXr + c + S, k11 = (r + S) * CXr + c + S, k01 = (r + S) * CXr + c;
+        const mk = (r + mh) * CXr + (c + mh);
+        const hm = H4[mk];
+        const col = hm < ALT_TH[0] ? ALT4[0] : hm < ALT_TH[1] ? ALT4[1] : hm < ALT_TH[2] ? ALT4[2] : ALT4[3];
+        const shade = SHADE_LO + (SHADE_HI - SHADE_LO) * clamp(0.5 + rvg[mk] * rvs, 0, 1);
+        ctx.fillStyle = `rgb(${Math.min(255, col[0] * shade) | 0},${Math.min(255, col[1] * shade) | 0},${Math.min(255, col[2] * shade) | 0})`;
         ctx.beginPath();
-        ctx.moveTo(fillPX[k], fillPY[k]);
+        ctx.moveTo(fillPX[k00], fillPY[k00]);
         ctx.lineTo(fillPX[k10], fillPY[k10]);
         ctx.lineTo(fillPX[k11], fillPY[k11]);
         ctx.lineTo(fillPX[k01], fillPY[k01]);
         ctx.closePath();
         ctx.fill();
-        ctx.stroke();
       }
     }
 
