@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, hypso } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, rrim } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -30,9 +30,7 @@ const CFG = {
 };
 
 const ITEM_TYPES = ['glove', 'goggle', 'zip'];
-const RV_BLUR = 12; // 尾根谷度の近傍半径(セル数。広いほどマダラが減る)
-const SHADE_LO = 0.6;  // 谷の暗さ係数
-const SHADE_HI = 1.22; // 尾根の明るさ係数
+const RV_BLUR = 5; // 尾根谷度の近傍半径(セル数)
 
 // セパラブルなボックスぼかし（src→dst、tmp は作業用）
 function boxBlur(src, nx, ny, rb, tmp, dst) {
@@ -465,9 +463,9 @@ export function start(canvas) {
     const sxOf = (gx) => cx + (ox0 + gx * CELL - g.px) * ppu;
     const syOf = (gy) => cy + (oy0 + gy * CELL - g.py) * ppu;
 
-    // 色相＝標高の段彩、明度＝尾根谷度（局所相対起伏）の陰影つき段彩。
+    // 赤色立体図ふう：尾根谷度(局所相対起伏)を明度で塗る。傾斜は等高線が担う。
     const drawTint = () => {
-      // 尾根谷度 = 高さ − 近傍平均（尾根で＋、谷で−）。広めに平均してマダラを抑える。
+      // 尾根谷度 = 高さ − 近傍平均（尾根で＋、谷で−）
       boxBlur(grid, nx, ny, RV_BLUR, gridT, gridB);
       let maxAbs = 1e-4;
       for (let k = 0; k < nx * ny; k++) {
@@ -476,12 +474,12 @@ export function start(canvas) {
         const a = rv < 0 ? -rv : rv;
         if (a > maxAbs) maxAbs = a;
       }
-      const scale = 0.5 / Math.max(maxAbs, 0.02);
-      const NH = 128; // 標高→色のLUT
-      const hl = new Uint8Array(NH * 3);
-      for (let b = 0; b < NH; b++) {
-        const c = hypso((b + 0.5) / NH);
-        hl[b * 3] = c[0]; hl[b * 3 + 1] = c[1]; hl[b * 3 + 2] = c[2];
+      const scale = 0.5 / Math.max(maxAbs, 0.02); // 0付近(平地)は中明度に
+      const NL = 64;
+      const lut = new Uint8Array(NL * 3);
+      for (let b = 0; b < NL; b++) {
+        const c = rrim(b / (NL - 1));
+        lut[b * 3] = c[0]; lut[b * 3 + 1] = c[1]; lut[b * 3 + 2] = c[2];
       }
       const M = clamp(Math.round(2 * R), 96, 340);
       shadeCanvas.width = M; shadeCanvas.height = M;
@@ -493,22 +491,15 @@ export function start(canvas) {
         for (let u = 0; u < M; u++) {
           const gxf = (u / (M - 1)) * (nx - 1);
           const i = gxf | 0, fi = gxf - i, i2 = Math.min(nx - 1, i + 1);
-          const w00 = (1 - fi) * (1 - fj), w10 = fi * (1 - fj), w01 = (1 - fi) * fj, w11 = fi * fj;
-          const k00 = j * nx + i, k10 = j * nx + i2, k01 = j2 * nx + i, k11 = j2 * nx + i2;
-          const h = grid[k00] * w00 + grid[k10] * w10 + grid[k01] * w01 + grid[k11] * w11;
-          const rv = gridRV[k00] * w00 + gridRV[k10] * w10 + gridRV[k01] * w01 + gridRV[k11] * w11;
-          let hb = (h * NH) | 0; if (hb < 0) hb = 0; else if (hb >= NH) hb = NH - 1;
-          const lb = hb * 3;
-          const shade = lerp(SHADE_LO, SHADE_HI, clamp(0.5 + rv * scale, 0, 1));
-          const idx = (v * M + u) * 4;
-          d[idx] = Math.min(255, hl[lb] * shade);
-          d[idx + 1] = Math.min(255, hl[lb + 1] * shade);
-          d[idx + 2] = Math.min(255, hl[lb + 2] * shade);
-          d[idx + 3] = 255;
+          const rv = (gridRV[j * nx + i] * (1 - fi) + gridRV[j * nx + i2] * fi) * (1 - fj)
+                   + (gridRV[j2 * nx + i] * (1 - fi) + gridRV[j2 * nx + i2] * fi) * fj;
+          let b = (clamp(0.5 + rv * scale, 0, 1) * (NL - 1)) | 0;
+          const idx = (v * M + u) * 4, lb = b * 3;
+          d[idx] = lut[lb]; d[idx + 1] = lut[lb + 1]; d[idx + 2] = lut[lb + 2]; d[idx + 3] = 255;
         }
       }
       shadeCtx.putImageData(img, 0, 0);
-      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingEnabled = true; // 立体図は連続的に
       ctx.drawImage(shadeCanvas, sxOf(0), syOf(0), (nx - 1) * CELL * ppu, (ny - 1) * CELL * ppu);
     };
 

@@ -50,35 +50,6 @@ export function elevColor(h) {
 
 export const rgba = (c, a = 1) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
 
-// 高度の段彩パレット。h:0..1 → 青→緑→茶→白。
-const HYPSO = [
-  [0.00, [56, 110, 158]],
-  [0.20, [86, 150, 132]],
-  [0.36, [110, 162, 90]],
-  [0.50, [170, 172, 100]],
-  [0.64, [158, 114, 68]],
-  [0.80, [122, 84, 54]],
-  [0.92, [206, 196, 178]],
-  [1.00, [248, 246, 240]],
-];
-
-export function hypso(h) {
-  const t = clamp(h, 0, 1);
-  for (let i = 1; i < HYPSO.length; i++) {
-    if (t <= HYPSO[i][0]) {
-      const [t0, c0] = HYPSO[i - 1];
-      const [t1, c1] = HYPSO[i];
-      const k = (t - t0) / (t1 - t0 || 1);
-      return [
-        Math.round(lerp(c0[0], c1[0], k)),
-        Math.round(lerp(c0[1], c1[1], k)),
-        Math.round(lerp(c0[2], c1[2], k)),
-      ];
-    }
-  }
-  return HYPSO[HYPSO.length - 1][1];
-}
-
 // 赤色立体図ふうの尾根谷ランプ。t:0=谷(暗赤)→1=尾根(白)。明度で尾根谷度を表す。
 const RRIM = [
   [0.00, [92, 32, 28]],
