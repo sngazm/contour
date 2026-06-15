@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 30,           // 1ゲームの長さ(秒)
@@ -877,24 +877,6 @@ export function start(canvas) {
       ctx.fillStyle = COL.peak;
       drawTriangle(sxp, syp - 3, 7);
       ctx.fill();
-    }
-
-    // フィールド境界（世界の縁）。外側を陰らせ、縁を線で示す
-    {
-      const bx = cx + (0 - g.px) * ppu, by = cy + (0 - g.py) * ppu;
-      const br = g.field.r * ppu;
-      ctx.beginPath();
-      ctx.rect(cx - R, cy - R, 2 * R, 2 * R);
-      ctx.arc(bx, by, br, 0, TAU);
-      ctx.fillStyle = 'rgba(70,66,58,0.32)'; // 圏外を陰らせる
-      ctx.fill('evenodd');
-      ctx.setLineDash([7, 7]);
-      ctx.strokeStyle = 'rgba(40,39,35,0.5)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(bx, by, br, 0, TAU);
-      ctx.stroke();
-      ctx.setLineDash([]);
     }
 
     // ふちを軽く沈めてレンズ感を出す
