@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 60,           // 1ゲームの長さ(秒)
@@ -344,7 +344,6 @@ export function start(canvas) {
   const endPointers = new Map();
   let endGesture = null;
   let pinchPrev = 0;
-  let playTap = null; // プレイ中の中央タップ（旗を立てて終了）判定
   const endPinchDist = () => {
     const v = [...endPointers.values()];
     return v.length < 2 ? 0 : Math.hypot(v[0].x - v[1].x, v[0].y - v[1].y);
@@ -375,7 +374,6 @@ export function start(canvas) {
       px: 0, py: 0,
       best: terrain.height(0, 0), // 到達した最高高度（自己記録＝スコア）
       flash: 0,                   // 記録更新の演出タイマー
-      flagged: false,             // 中央タップで旗を立てて終了したか
       radar: 0,             // レーダー所持数(1回ぶんのズームアウト)
       bonus: 0,             // 到達したボーナス地点の数（別軸の達成）
       boonFlash: 0,         // ボーナス取得の演出
@@ -413,10 +411,7 @@ export function start(canvas) {
   }
 
   canvas.addEventListener('pointerdown', (e) => {
-    if (game.state !== 'end') {
-      playTap = { x: e.clientX, y: e.clientY, t: performance.now(), moved: false };
-      return;
-    }
+    if (game.state !== 'end') return;
     endPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (endPointers.size === 1) {
       endGesture = { t0: performance.now(), moved: false, lastX: e.clientX, lastY: e.clientY, vyaw: 0 };
@@ -426,11 +421,7 @@ export function start(canvas) {
     }
   });
   canvas.addEventListener('pointermove', (e) => {
-    if (game.state !== 'end') {
-      if (playTap && Math.hypot(e.clientX - playTap.x, e.clientY - playTap.y) > 8) playTap.moved = true;
-      return;
-    }
-    if (!endPointers.has(e.pointerId)) return;
+    if (game.state !== 'end' || !endPointers.has(e.pointerId)) return;
     endPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const cam = game.end.cam;
     if (endPointers.size >= 2) {
@@ -447,17 +438,6 @@ export function start(canvas) {
       cam.touched = true;
       endGesture.lastX = e.clientX; endGesture.lastY = e.clientY;
     }
-  });
-  window.addEventListener('pointerup', () => {
-    // プレイ中：中央付近の短いタップ＝旗を立てて即終了
-    if (game.state === 'play' && !game.far && playTap && !playTap.moved &&
-        performance.now() - playTap.t < 300) {
-      const r = canvas.getBoundingClientRect();
-      const dxc = (playTap.x - r.left) - r.width / 2;
-      const dyc = (playTap.y - r.top) - r.height / 2;
-      if (Math.hypot(dxc, dyc) < 64) { game.flagged = true; beginEnd(); }
-    }
-    playTap = null;
   });
   window.addEventListener('pointerup', (e) => {
     if (game.state !== 'end' || !endPointers.has(e.pointerId)) return;
@@ -1476,22 +1456,11 @@ export function start(canvas) {
     ctx.lineTo(epr.sx, epr.sy);
     ctx.stroke();
     ctx.setLineDash([]);
-    if (g.flagged) {
-      // 立てた旗
-      const px = epr.sx, py = epr.sy, ph = 24;
-      ctx.strokeStyle = '#26251f'; ctx.lineWidth = 2; ctx.lineCap = 'round';
-      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, py - ph); ctx.stroke();
-      ctx.fillStyle = COL.accent;
-      ctx.beginPath(); ctx.moveTo(px, py - ph); ctx.lineTo(px + 16, py - ph + 6); ctx.lineTo(px, py - ph + 12); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#26251f';
-      ctx.beginPath(); ctx.arc(px, py, 3, 0, TAU); ctx.fill();
-    } else {
-      const pulse = 1 + 0.22 * Math.sin(e.t * 5);
-      ctx.fillStyle = COL.accent;
-      ctx.beginPath();
-      ctx.arc(epr.sx, epr.sy, 7 * pulse, 0, TAU);
-      ctx.fill();
-    }
+    const pulse = 1 + 0.22 * Math.sin(e.t * 5);
+    ctx.fillStyle = COL.accent;
+    ctx.beginPath();
+    ctx.arc(epr.sx, epr.sy, 7 * pulse, 0, TAU);
+    ctx.fill();
 
     // フィールド最高地点を強調（金色のビーコン）
     const pk = g.field.max;
