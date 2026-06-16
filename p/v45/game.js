@@ -1,16 +1,11 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
-  // 体力制（時間制限の代わり）
-  HP_WALK: 0.035,         // 平地を歩く消費(体力/秒)
-  HP_CLIMB_K: 380,        // 登りで増える消費の強さ
-  HP_FALL: 0.6,           // 転落中の消費(体力/秒)＝急激
-  HEAL: 0.35,             // ドリンク1本の回復量
-  HEALTH_LAG: 2.6,        // ダメージ/回復の追従(格ゲー風)速度
+  DURATION: 60,           // 1ゲームの長さ(秒)
   VIEW_RADIUS_WORLD: 235, // 既定(最ズームイン)の視界半径
   ALWAYS_R: 80,           // 常に見える近距離バブル(これより外は視線遮蔽)
   ZOOM_MAX_R: 1500,       // ピンチアウトで見渡せる最大の視界半径
@@ -26,7 +21,7 @@ const CFG = {
   PATH_MIN_STEP: 5,       // 軌跡を記録する最小移動距離
   FIELD_R: 1500,          // フィールド(ステージ)の半径。これが最高地点の探索範囲
   RADAR_COUNT: 5,         // レーダー（谷に多い）
-  DRINK_COUNT: 5,         // ドリンク缶（体力回復・満遍なく）
+  BOON_COUNT: 4,          // ボーナス地点（尾根・高所に多い）
   PICKUP_R: 30,           // アイテム取得の距離
   GLOVE_K_MUL: 0.34,      // グローブ装備時の登坂ペナルティ倍率
   GLOVE_MIN: 0.6,         // グローブ装備時の最低速度係数(急崖でも登れる)
@@ -45,6 +40,7 @@ const CFG = {
   NPC_AGGRO: 118,         // 索敵半径＝プレイヤー視界(235)の半分。先に気づかれにくい
   NPC_PUSH_R: 26,         // この距離で突き落とす
   NPC_PUSH_SPEED: 250,    // 突き落としの初速
+  BONUS_TIME: 6,          // ボーナス1個で延びる秒数
   NPC_VISION_CONTOURS: 3, // NPCは自分より これ×等高線 以上高い地形の向こうが見えない
   NPC_CHASE_MEMORY: 0.8,  // 見失ってから追跡を続ける秒数
   PLAYER_CHARGE: 1.15,    // この速度係数以上で突っ込むと逆にNPCを突き落とせる
@@ -224,7 +220,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v46'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v45'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -237,30 +233,30 @@ const COL = {
   accent: '#e0512e',    // 軌跡・到達点
   peak: '#c8920a',      // フィールド最高地点
   item: '#1f8a8a',      // レーダー
-  drink: '#2a7fd0',     // ドリンク缶（回復）
-  heal: '#3a90e0',      // 回復の青
-  dmg: '#d8392f',       // ダメージの赤
+  boon: '#d59a12',      // ボーナス地点
 };
 
-// 散布。レーダーは谷(尾根谷度↓)に寄せる。ドリンクは満遍なく。
+// 散布。レーダーは谷(尾根谷度↓)、ボーナスは尾根・高所(尾根谷度↑)に寄せる。
 function spawnPickups(terrain, R) {
   const list = [];
   const rvAt = (x, y) => {
     const h = terrain.height(x, y);
-    const s = terrain.height(x + 120, y) + terrain.height(x - 120, y) + terrain.height(x, y + 120) + terrain.height(x, y - 120);
+    let s = 0;
+    s += terrain.height(x + 120, y) + terrain.height(x - 120, y) + terrain.height(x, y + 120) + terrain.height(x, y - 120);
     return h - s / 4; // 谷で負, 尾根で正
   };
-  const rnd = () => { const a = Math.random() * TAU, rr = 240 + Math.random() * (R - 300); return { x: Math.cos(a) * rr, y: Math.sin(a) * rr }; };
-  const place = (type, mode) => {
-    let best = rnd();
-    if (mode !== 'any') {
-      let bs = mode === 'valley' ? Infinity : -Infinity;
-      for (let k = 0; k < 12; k++) { const p = rnd(); const s = rvAt(p.x, p.y); if (mode === 'valley' ? s < bs : s > bs) { bs = s; best = p; } }
+  const place = (type, valley) => {
+    let best = null, bestScore = valley ? Infinity : -Infinity;
+    for (let k = 0; k < 12; k++) {
+      const a = Math.random() * TAU, rr = 240 + Math.random() * (R - 300);
+      const x = Math.cos(a) * rr, y = Math.sin(a) * rr;
+      const s = rvAt(x, y);
+      if (valley ? s < bestScore : s > bestScore) { bestScore = s; best = { x, y }; }
     }
     list.push({ x: best.x, y: best.y, type, taken: false });
   };
-  for (let i = 0; i < CFG.RADAR_COUNT; i++) place('radar', 'valley');
-  for (let i = 0; i < CFG.DRINK_COUNT; i++) place('drink', 'any');
+  for (let i = 0; i < CFG.RADAR_COUNT; i++) place('radar', true);
+  for (let i = 0; i < CFG.BOON_COUNT; i++) place('boon', false);
   return list;
 }
 
@@ -277,14 +273,14 @@ function drawItemGlyph(ctx, x, y, type, s, color) {
     ctx.beginPath(); ctx.arc(x, y, s * 0.45, 0, TAU); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + s * 0.85, y - s * 0.5); ctx.stroke();
     ctx.beginPath(); ctx.arc(x, y, s * 0.16, 0, TAU); ctx.fill();
-  } else if (type === 'drink') {
-    // ドリンク缶
-    const w = s * 0.62, h = s * 1.05;
+  } else if (type === 'boon') {
+    // 4方向に尖った星
     ctx.beginPath();
-    if (ctx.roundRect) ctx.roundRect(x - w, y - h, w * 2, h * 2, s * 0.22);
-    else ctx.rect(x - w, y - h, w * 2, h * 2);
-    ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x - w * 0.6, y - h * 0.4); ctx.lineTo(x + w * 0.6, y - h * 0.4); ctx.stroke();
+    ctx.moveTo(x, y - s); ctx.lineTo(x + s * 0.28, y - s * 0.28);
+    ctx.lineTo(x + s, y); ctx.lineTo(x + s * 0.28, y + s * 0.28);
+    ctx.lineTo(x, y + s); ctx.lineTo(x - s * 0.28, y + s * 0.28);
+    ctx.lineTo(x - s, y); ctx.lineTo(x - s * 0.28, y - s * 0.28);
+    ctx.closePath(); ctx.fill();
   } else if (type === 'glove') {
     // 二段のシェブロン（登る／上へ）
     for (let k = 0; k < 2; k++) {
@@ -410,17 +406,16 @@ export function start(canvas) {
       field: { r: CFG.FIELD_R, max: findFieldMax(terrain, CFG.FIELD_R) },
       state: 'ready',
       time: 0,
-      health: 1,            // 体力(0で終了)
-      healthLag: 1,         // 表示の追従値(格ゲー風のダメージ/回復)
-      drainRate: 0,         // 現在の消費ペース(リング色用)
+      timeLimit: CFG.DURATION,      // ボーナスで延びる
       far: false,                   // レーダー偵察中(ズームアウト)か
       viewR: CFG.VIEW_RADIUS_WORLD, // 現在の視界半径(補間用)
       px: 0, py: 0,
       best: terrain.height(0, 0), // 到達した最高高度（自己記録＝スコア）
-      flash: 0,                   // 記録更新の演出(HUDの数字)
+      flash: 0,                   // 記録更新の演出タイマー
       flagged: false,             // 中央タップで旗を立てて終了したか
       radar: 0,             // レーダー所持数(1回ぶんのズームアウト)
-      radarFlies: [],       // レーダー取得演出（左下ボタンへ飛ぶ）
+      bonus: 0,             // 到達したボーナス地点の数（別軸の達成）
+      boonFlash: 0,         // ボーナス取得の演出
       marks: [],            // 取得/偵察した地点 {x,y,h,type}（リザルト表示用）
       pickups: spawnPickups(terrain, CFG.FIELD_R),
       npcs: spawnNpcs(CFG.FIELD_R),
@@ -461,7 +456,7 @@ export function start(canvas) {
     try {
       fetch('/api/runs', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ seed: g.runNumber, path, best: altOf(g.best), flagged: g.flagged }),
+        body: JSON.stringify({ seed: g.runNumber, path, best: altOf(g.best), bonus: g.bonus, flagged: g.flagged }),
       }).catch(() => {});
     } catch (_) {}
   }
@@ -515,15 +510,14 @@ export function start(canvas) {
       endGesture.lastX = e.clientX; endGesture.lastY = e.clientY;
     }
   });
-  // 左下レーダーボタンの画面上の位置（描画とタップで共有）
-  const radarBtnPos = () => ({ x: 42, y: window.innerHeight - 60, r: 24 });
   window.addEventListener('pointerup', () => {
-    // プレイ中：左下のレーダーボタンを短くタップ＝偵察（所持時）
+    // プレイ中：中央（自分）付近の短いタップ＝レーダー偵察（所持時）
     if (game.state === 'play' && !game.far && game.radar > 0 && playTap && !playTap.moved &&
         performance.now() - playTap.t < 300) {
       const r = canvas.getBoundingClientRect();
-      const b = radarBtnPos();
-      if (Math.hypot((playTap.x - r.left) - b.x, (playTap.y - r.top) - b.y) < b.r + 6) {
+      const dxc = (playTap.x - r.left) - r.width / 2;
+      const dyc = (playTap.y - r.top) - r.height / 2;
+      if (Math.hypot(dxc, dyc) < 64) {
         game.far = true; game.radar -= 1;
         game.marks.push({ x: game.px, y: game.py, h: game.terrain.height(game.px, game.py), type: 'scan' });
       }
@@ -575,12 +569,10 @@ export function start(canvas) {
       const hNow = g.terrain.height(g.px, g.py);
       if (hNow > g.best) { g.best = hNow; g.flash = 0.7; } // 自己記録更新＝達成
       if (g.flash > 0) g.flash -= dt;
+      if (g.boonFlash > 0) g.boonFlash -= dt;
       if (g.grace > 0) g.grace -= dt;
-      for (const fl of g.radarFlies) fl.t += dt / 0.5; // 0.5秒で着地
-      if (g.radarFlies.some((f) => f.t >= 1)) g.radarFlies = g.radarFlies.filter((f) => f.t < 1);
       let moved = false;
       g.curSpeed = 0;
-      let drain = 0; // この瞬間の体力消費ペース(体力/秒)
       if (g.riding) {
         // ジップライン：等速で目標へ（地形を無視）
         const dx = g.riding.tx - g.px, dy = g.riding.ty - g.py;
@@ -590,7 +582,6 @@ export function start(canvas) {
         if (d <= CFG.ZIP_ARRIVE || d <= step) { g.px = g.riding.tx; g.py = g.riding.ty; g.riding = null; }
         else { g.px += (dx / d) * step; g.py += (dy / d) * step; }
         g.curSpeed = CFG.ZIP_SPEED / CFG.BASE_SPEED; // 速い＝最長
-        drain = CFG.HP_WALK * 0.6; // 滑空は軽い消費
         moved = true;
       } else if (g.fall) {
         // 転落中：操作不能。下り方向(=勾配の逆)へ加速しながら滑り落ちる
@@ -609,7 +600,6 @@ export function start(canvas) {
         const spd = Math.hypot(g.fall.vx, g.fall.vy);
         if (spd > 1e-4) { g.moveDir.x = g.fall.vx / spd; g.moveDir.y = g.fall.vy / spd; }
         g.curSpeed = spd / CFG.BASE_SPEED;
-        drain = CFG.HP_FALL; // 転落は急激に消費
         if (steep < CFG.FALL_RECOVER && spd < 70) {
           // 緩斜面で停止 → 落下時間に応じて放心(1〜3秒)
           g.stun = clamp(g.fall.t * 1.3, 1, 3);
@@ -643,7 +633,6 @@ export function start(canvas) {
           g.py += mv.y * sp;
           g.moveDir.x = mv.x; g.moveDir.y = mv.y;
           g.curSpeed = f * mv.mag; // 実際の速度係数
-          drain = CFG.HP_WALK * mv.mag * (1 + Math.max(0, along) * CFG.HP_CLIMB_K); // 登りほど消費
           moved = true;
         }
       }
@@ -659,16 +648,11 @@ export function start(canvas) {
           if (!it.taken && Math.hypot(g.px - it.x, g.py - it.y) < CFG.PICKUP_R) {
             it.taken = true;
             g.marks.push({ x: it.x, y: it.y, h: g.terrain.height(it.x, it.y), type: it.type });
-            if (it.type === 'radar') { g.radar += 1; g.radarFlies.push({ t: 0 }); } // 左下へ飛ぶ演出
-            else if (it.type === 'drink') g.health = Math.min(1, g.health + CFG.HEAL); // 回復
+            if (it.type === 'radar') g.radar += 1;
+            else if (it.type === 'boon') { g.bonus += 1; g.boonFlash = 0.8; g.timeLimit += CFG.BONUS_TIME; }
           }
         }
       }
-      // 体力の消費/回復と追従表示（格ゲー風）
-      g.drainRate = drain;
-      g.health = clamp(g.health - drain * dt, 0, 1);
-      g.healthLag += (g.health - g.healthLag) * Math.min(1, dt * CFG.HEALTH_LAG);
-      if (g.health <= 0) { beginEnd(); return; }
       // NPC：広い範囲で高い所へ登る／プレイヤーが見えて近いと追跡し突き落とす
       let anyPush = false;
       const playerH = g.terrain.height(g.px, g.py);
@@ -752,6 +736,7 @@ export function start(canvas) {
         }
       }
       if (anyPush) for (const n of g.npcs) { n.satT = CFG.NPC_SATISFIED; n.chaseT = 0; } // 全員満足
+      if (g.time >= g.timeLimit) beginEnd();
       return;
     }
     if (g.state === 'end') {
@@ -894,7 +879,7 @@ export function start(canvas) {
   }
 
   // 数値表示（★=自己記録 / ▲=目標 / ●=現在地 / ✦=ボーナス）。常時表示。
-  function drawHud(playerH, maxH, best, flash) {
+  function drawHud(playerH, maxH, best, flash, bonus) {
     const top = 26;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -907,6 +892,10 @@ export function start(canvas) {
     ctx.fillText('▲ ' + altOf(maxH), W / 2, top + 24);
     ctx.fillStyle = 'rgba(40,39,35,0.5)';
     ctx.fillText('● ' + altOf(playerH), W / 2, top + 44);
+    if (bonus > 0) {
+      ctx.fillStyle = COL.boon;
+      ctx.fillText('✦ ' + bonus, W / 2, top + 64);
+    }
   }
 
   // 左端の縦型・高度計（上端＝フィールド最高。4色スケール＋現在地/記録/目標）
@@ -1123,12 +1112,12 @@ export function start(canvas) {
     };
     const itemPulse = ((g.time + g.readyPulse) % 1.2) / 1.2;
 
-    // アイテム（未取得・視界内のみ表示）。レーダー=青緑 / ドリンク=青
+    // アイテム（未取得・視界内のみ表示）。レーダー=青緑 / ボーナス=金
     for (const it of g.pickups) {
       if (it.taken || !visibleAt(it.x, it.y)) continue;
       const sx = wsx(it.x), sy = wsy(it.y);
-      const col = it.type === 'drink' ? COL.drink : COL.item;
-      const rgbStr = it.type === 'drink' ? '42,127,208' : '31,138,138';
+      const col = it.type === 'boon' ? COL.boon : COL.item;
+      const rgbStr = it.type === 'boon' ? '213,154,18' : '31,138,138';
       ctx.strokeStyle = `rgba(${rgbStr},${0.5 * (1 - itemPulse)})`;
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -1247,28 +1236,15 @@ export function start(canvas) {
     ctx.arc(cx, cy, R, 0, TAU);
     ctx.stroke();
 
-    // 体力リング（残量＝弧の長さ。色＝消費ペース。格ゲー風のダメージ赤/回復青）
+    // 残り時間リング
     if (g.state === 'play') {
-      const rr = R + 7, A0 = -Math.PI / 2;
-      const hp = clamp(g.health, 0, 1), lag = clamp(g.healthLag, 0, 1);
-      ctx.lineWidth = 3.5;
-      ctx.lineCap = 'butt';
-      // 背景の薄い輪
-      ctx.strokeStyle = 'rgba(40,39,35,0.12)';
-      ctx.beginPath(); ctx.arc(cx, cy, rr, 0, TAU); ctx.stroke();
-      // ダメージ(赤)/回復(青)の追従部分
-      if (lag > hp + 1e-3) {
-        ctx.strokeStyle = COL.dmg;
-        ctx.beginPath(); ctx.arc(cx, cy, rr, A0 + hp * TAU, A0 + lag * TAU); ctx.stroke();
-      } else if (lag < hp - 1e-3) {
-        ctx.strokeStyle = COL.heal;
-        ctx.beginPath(); ctx.arc(cx, cy, rr, A0 + lag * TAU, A0 + hp * TAU); ctx.stroke();
-      }
-      // 本体（消費ペースで色：低=穏やか / 高=暖色）
-      const pace = clamp(g.drainRate / 0.12, 0, 1);
-      const pc = [Math.round(lerp(70, 224, pace)), Math.round(lerp(150, 110, pace)), Math.round(lerp(120, 60, pace))];
-      ctx.strokeStyle = `rgb(${pc[0]},${pc[1]},${pc[2]})`;
-      ctx.beginPath(); ctx.arc(cx, cy, rr, A0, A0 + Math.min(hp, lag) * TAU); ctx.stroke();
+      const remain = clamp(1 - g.time / g.timeLimit, 0, 1);
+      const warm = g.time / g.timeLimit > 0.8;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = warm ? COL.accent : 'rgba(40,39,35,0.45)';
+      ctx.beginPath();
+      ctx.arc(cx, cy, R + 7, -Math.PI / 2, -Math.PI / 2 + remain * TAU);
+      ctx.stroke();
     }
 
     // プレイヤー（通常は中央。引き時はマップ上の実位置に）。転落中はアクセント色＆回転
@@ -1314,6 +1290,32 @@ export function start(canvas) {
     }
 
     // レーダー所持中：プレイヤーを脈打つ青緑の輪で強調＝中央タップできる合図
+    if (g.radar > 0 && !falling && !stunned && g.state === 'play') {
+      const rp = ((g.time + g.readyPulse) % 1.1) / 1.1;
+      ctx.strokeStyle = `rgba(31,138,138,${0.7 * (1 - rp)})`;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(psx, psy, 14 + rp * 20, 0, TAU);
+      ctx.stroke();
+    }
+
+    if (g.flash > 0) {
+      const fr = 1 - g.flash / 0.7;
+      ctx.strokeStyle = `rgba(224,81,46,${0.75 * (1 - fr)})`;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(psx, psy, 10 + fr * 36, 0, TAU);
+      ctx.stroke();
+    }
+    if (g.boonFlash > 0) {
+      const fr = 1 - g.boonFlash / 0.8;
+      ctx.strokeStyle = `rgba(213,154,18,${0.85 * (1 - fr)})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(psx, psy, 10 + fr * 42, 0, TAU);
+      ctx.stroke();
+    }
+
     if (g.state === 'ready') {
       const pr = (g.readyPulse % 1.6) / 1.6;
       ctx.strokeStyle = `rgba(38,37,31,${0.45 * (1 - pr)})`;
@@ -1335,38 +1337,26 @@ export function start(canvas) {
       ctx.fill();
     }
 
-    drawHud(g.terrain.height(g.px, g.py), g.field.max.h, g.best, g.flash);
+    drawHud(g.terrain.height(g.px, g.py), g.field.max.h, g.best, g.flash, g.bonus);
     drawAltMeter(g.terrain.height(g.px, g.py), g.best, g.field.max.h);
 
-    // 左下のレーダーボタン（所持時）。取得時はプレイヤーから飛んでくる演出。
-    const rb = { x: 42, y: H - 60, r: 24 };
+    // 左下：レーダー所持数（上）と #ラン番号（下）
     if (g.radar > 0) {
-      ctx.fillStyle = 'rgba(247,246,242,0.85)';
-      ctx.beginPath(); ctx.arc(rb.x, rb.y, rb.r, 0, TAU); ctx.fill();
-      ctx.strokeStyle = COL.item; ctx.lineWidth = 1.6;
-      ctx.beginPath(); ctx.arc(rb.x, rb.y, rb.r, 0, TAU); ctx.stroke();
-      drawItemGlyph(ctx, rb.x, rb.y, 'radar', 11, COL.item);
+      const bx = 26, by = H - 46;
+      drawItemGlyph(ctx, bx, by, 'radar', 9, COL.item);
       if (g.radar > 1) {
-        ctx.fillStyle = COL.item; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.font = '700 12px ui-monospace, Menlo, monospace';
-        ctx.fillText('×' + g.radar, rb.x + rb.r - 2, rb.y + rb.r - 4);
+        ctx.fillStyle = COL.item;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = '600 11px ui-monospace, Menlo, monospace';
+        ctx.fillText('×' + g.radar, bx + 15, by + 8);
       }
     }
-    // 取得演出：プレイヤー(中央)→ボタンへ飛ぶ
-    for (const fl of g.radarFlies) {
-      const p = easeInOut(clamp(fl.t, 0, 1));
-      const fx = lerp(cx, rb.x, p), fy = lerp(cy, rb.y, p);
-      const sc = lerp(11, 9, p);
-      ctx.fillStyle = 'rgba(247,246,242,0.95)';
-      ctx.beginPath(); ctx.arc(fx, fy, sc + 3, 0, TAU); ctx.fill();
-      drawItemGlyph(ctx, fx, fy, 'radar', sc, COL.item);
-    }
-    // #ラン番号（左下・最下段）
     ctx.fillStyle = 'rgba(40,39,35,0.45)';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.font = '600 13px ui-monospace, "SF Mono", Menlo, monospace';
-    ctx.fillText('#' + g.runNumber, 16, H - 20);
+    ctx.fillText('#' + g.runNumber, 16, H - 22);
 
     // タイトル（ready のときだけ）
     if (g.state === 'ready') {
@@ -1672,25 +1662,12 @@ export function start(canvas) {
         ctx.beginPath(); ctx.arc(mr.sx, mr.sy, 5, 0, TAU); ctx.stroke();
         ctx.beginPath(); ctx.arc(mr.sx, mr.sy, 9, 0, TAU); ctx.stroke();
       } else {
-        const col = m.type === 'drink' ? COL.drink : COL.item;
+        const col = m.type === 'boon' ? COL.boon : COL.item;
         ctx.fillStyle = 'rgba(247,246,242,0.92)';
         ctx.beginPath(); ctx.arc(mr.sx, mr.sy, 7, 0, TAU); ctx.fill();
         ctx.strokeStyle = col; ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.arc(mr.sx, mr.sy, 7, 0, TAU); ctx.stroke();
         drawItemGlyph(ctx, mr.sx, mr.sy, m.type, 5, col);
-      }
-    }
-
-    // 他プレイヤーの終着点に小さなグレーの旗
-    if (g.ghosts) {
-      for (const gh of g.ghosts) {
-        const pa = gh.path; if (!pa || !pa.length) continue;
-        const lp = pa[pa.length - 1];
-        const fr = project(lp[0], lp[1], lp[2]);
-        ctx.strokeStyle = 'rgba(70,66,58,0.6)'; ctx.lineWidth = 1.5; ctx.lineCap = 'round';
-        ctx.beginPath(); ctx.moveTo(fr.sx, fr.sy); ctx.lineTo(fr.sx, fr.sy - 14); ctx.stroke();
-        ctx.fillStyle = 'rgba(70,66,58,0.6)';
-        ctx.beginPath(); ctx.moveTo(fr.sx, fr.sy - 14); ctx.lineTo(fr.sx + 9, fr.sy - 11); ctx.lineTo(fr.sx, fr.sy - 8); ctx.closePath(); ctx.fill();
       }
     }
 
@@ -1721,9 +1698,14 @@ export function start(canvas) {
     ctx.textBaseline = 'middle';
     ctx.font = `700 ${Math.min(W, H) * 0.13}px ui-monospace, "SF Mono", Menlo, monospace`;
     ctx.fillStyle = 'rgba(38,37,31,0.9)';
-    ctx.fillText('★ ' + altOf(g.best), W / 2, H * 0.18);
+    ctx.fillText('★ ' + altOf(g.best), W / 2, H * 0.17);
+    if (g.bonus > 0) {
+      ctx.font = `700 ${Math.min(W, H) * 0.05}px ui-monospace, "SF Mono", Menlo, monospace`;
+      ctx.fillStyle = COL.boon;
+      ctx.fillText('✦ ' + g.bonus, W / 2, H * 0.17 + Math.min(W, H) * 0.1);
+    }
 
-    drawHud(ep.h, g.field.max.h, g.best, 0);
+    drawHud(ep.h, g.field.max.h, g.best, 0, g.bonus);
 
     // ラン番号（#N）と、この地形を遊んだ人数（人アイコン＋数）を小さく
     {
