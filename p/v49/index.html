@@ -28,26 +28,18 @@
       50% { box-shadow: 0 0 0 10px rgba(224,81,46,0); }
     }
 
-    /* 右上の隅にまとめた小さなリンク（バージョン一覧 / ストーリー） */
-    #links {
-      position: fixed; top: calc(10px + env(safe-area-inset-top));
-      right: calc(12px + env(safe-area-inset-right));
-      display: flex; flex-direction: column; align-items: flex-end; gap: 6px; z-index: 5;
+    #vlink {
+      position: fixed; left: 50%; transform: translateX(-50%);
+      bottom: calc(10px + env(safe-area-inset-bottom));
+      font: 12px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: 0.12em;
+      color: rgba(40,39,35,0.42); text-decoration: none; padding: 6px 10px;
     }
-    #links a {
-      font: 11px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: 0.1em;
-      color: rgba(40,39,35,0.42); text-decoration: none; padding: 4px 6px;
-    }
-    #links a:active { color: rgba(40,39,35,0.7); }
   </style>
 </head>
 <body>
   <canvas id="c"></canvas>
   <button id="viewbtn" aria-label="flag"></button>
-  <nav id="links">
-    <a href="../../">≡ versions</a>
-    <a href="../../story.html">story</a>
-  </nav>
+  <a id="vlink" href="../../">≡ versions</a>
   <script type="module">
     import { start } from './game.js';
     start(document.getElementById('c'));

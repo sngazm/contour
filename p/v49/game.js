@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -36,8 +36,7 @@ const CFG = {
   ZIP_ARRIVE: 6,          // 到着判定の距離
   SLOPE_AVG_DIST: 45,     // 速度を決める傾斜の平均距離(進行方向の±これ)
   FALL_SLOPE: 0.0034,     // これより急で「登っていない」と滑り落ちる
-  CLIMB_MAX: 0.0040,      // これより急だと押していても登れず転落（登りでも落ちやすめ）
-  TREMBLE_FROM: 0.62,     // 転落しきい値の何割で震え始めるか
+  CLIMB_MAX: 0.0048,      // これより急だと押していても登れず転落
   FALL_RECOVER: 0.0022,   // これより緩くなれば踏ん張りを取り戻す
   FALL_ACCEL: 220000,     // 転落の加速(傾斜に比例)
   FALL_DRAG: 3,           // 転落の減衰(/秒)
@@ -226,7 +225,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v50'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v49'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -244,20 +243,25 @@ const COL = {
   dmg: '#d8392f',       // ダメージの赤
 };
 
-// 散布。バッテリー(レーダー)は低地に、酸素ボンベ(ドリンク)は高地に寄せる。
+// 散布。レーダーは谷(尾根谷度↓)に寄せる。ドリンクは満遍なく。
 function spawnPickups(terrain, R) {
   const list = [];
+  const rvAt = (x, y) => {
+    const h = terrain.height(x, y);
+    const s = terrain.height(x + 120, y) + terrain.height(x - 120, y) + terrain.height(x, y + 120) + terrain.height(x, y - 120);
+    return h - s / 4; // 谷で負, 尾根で正
+  };
   const rnd = () => { const a = Math.random() * TAU, rr = 240 + Math.random() * (R - 300); return { x: Math.cos(a) * rr, y: Math.sin(a) * rr }; };
   const place = (type, mode) => {
     let best = rnd();
     if (mode !== 'any') {
-      let bs = mode === 'low' ? Infinity : -Infinity;
-      for (let k = 0; k < 12; k++) { const p = rnd(); const s = terrain.height(p.x, p.y); if (mode === 'low' ? s < bs : s > bs) { bs = s; best = p; } }
+      let bs = mode === 'valley' ? Infinity : -Infinity;
+      for (let k = 0; k < 12; k++) { const p = rnd(); const s = rvAt(p.x, p.y); if (mode === 'valley' ? s < bs : s > bs) { bs = s; best = p; } }
     }
     list.push({ x: best.x, y: best.y, type, taken: false });
   };
-  for (let i = 0; i < CFG.RADAR_COUNT; i++) place('radar', 'low');
-  for (let i = 0; i < CFG.DRINK_COUNT; i++) place('drink', 'high');
+  for (let i = 0; i < CFG.RADAR_COUNT; i++) place('radar', 'valley');
+  for (let i = 0; i < CFG.DRINK_COUNT; i++) place('drink', 'any');
   return list;
 }
 
@@ -397,29 +401,16 @@ export function start(canvas) {
   }
 
   function newGame() {
-    // デイリーチャレンジ：URLに ?daily が付いていれば、その日の日付をシードに固定
-    const daily = new URLSearchParams(location.search).has('daily');
-    let runNumber = 1, dateLabel = '';
-    if (daily) {
-      // JST(UTC+9)の日付を YYYYMMDD の整数に。全員その日は同じ地形・足跡が貯まる
-      const d = new Date(Date.now() + 9 * 3600 * 1000);
-      const y = d.getUTCFullYear(), m = d.getUTCMonth() + 1, day = d.getUTCDate();
-      runNumber = y * 10000 + m * 100 + day; // 例: 20260616（ラン番号(小さい整数)と衝突しない）
-      const p2 = (n) => String(n).padStart(2, '0');
-      dateLabel = y + '-' + p2(m) + '-' + p2(day);
-    } else {
-      // ラン回数をブラウザに記録。Nラン目は全員同じ地形 → 足跡が噛み合う
-      try {
-        runNumber = (parseInt(localStorage.getItem('topopo_run') || '0', 10) || 0) + 1;
-        localStorage.setItem('topopo_run', String(runNumber));
-      } catch (_) { /* localStorage不可でも続行 */ }
-    }
+    // ラン回数をブラウザに記録。Nラン目は全員同じ地形 → 足跡が噛み合う
+    let runNumber = 1;
+    try {
+      runNumber = (parseInt(localStorage.getItem('topopo_run') || '0', 10) || 0) + 1;
+      localStorage.setItem('topopo_run', String(runNumber));
+    } catch (_) { /* localStorage不可でも続行 */ }
     const terrain = makeTerrain(runSeed(runNumber));
     game = {
       terrain,
       runNumber,
-      daily,                        // デイリーチャレンジか
-      dateLabel,                    // デイリー時の日付表示
       ghosts: [],                   // 他プレイヤーの足跡（非同期で読み込む）
       field: { r: CFG.FIELD_R, max: findFieldMax(terrain, CFG.FIELD_R) },
       state: 'ready',
@@ -444,7 +435,6 @@ export function start(canvas) {
       stunMax: 0,
       grace: 0,             // 復帰直後の無敵(突かれない)時間
       curSpeed: 0,          // 現在の速度係数(描画の線長に使用)
-      tremble: 0,           // 転落しきい値への近さ(プレイヤーの震え)
       moveDir: { x: 0, y: 0 },
       path: [{ x: 0, y: 0, h: terrain.height(0, 0) }],
       readyPulse: 0,
@@ -598,7 +588,6 @@ export function start(canvas) {
       if (g.radarFlies.some((f) => f.t >= 1)) g.radarFlies = g.radarFlies.filter((f) => f.t < 1);
       let moved = false;
       g.curSpeed = 0;
-      g.tremble = 0; // 転落しきい値への近さ（その他状態では震えない）
       let drain = 0; // この瞬間の体力消費ペース(体力/秒)
       if (g.riding) {
         // ジップライン：等速で目標へ（地形を無視）
@@ -646,9 +635,6 @@ export function start(canvas) {
         const steep = Math.hypot(grad.x, grad.y);
         const fallS = CFG.FALL_SLOPE, climbMax = CFG.CLIMB_MAX;
         const climbing = mv.mag > 0.25 && (grad.x * mv.x + grad.y * mv.y) > 0; // 上りへ踏ん張る
-        // 転落しきい値への近さ＝震え（登り中は climbMax、それ以外は fallS が基準）
-        const thr = climbing ? climbMax : fallS;
-        g.tremble = clamp((steep - thr * CFG.TREMBLE_FROM) / (thr * (1 - CFG.TREMBLE_FROM)), 0, 1);
         if (steep > climbMax || (steep > fallS && !climbing)) {
           g.fall = { vx: 0, vy: 0, t: 0 };
           g.health = clamp(g.health - CFG.FALL_DAMAGE, 0, 1); // 転落ダメージ(約20%)
@@ -1395,14 +1381,7 @@ export function start(canvas) {
 
     // プレイヤー（通常は中央。引き時はマップ上の実位置に）。転落中はアクセント色＆回転
     const mv = input.read();
-    let psx = wsx(g.px), psy = wsy(g.py);
-    // 転落しきい値に近いほど小刻みに震える（崖っぷちの危うさ）
-    const trm = g.tremble || 0;
-    if (trm > 0 && !g.fall) {
-      const amp = trm * trm * 4.5;
-      psx += (Math.random() - 0.5) * 2 * amp;
-      psy += (Math.random() - 0.5) * 2 * amp;
-    }
+    const psx = wsx(g.px), psy = wsy(g.py);
     const falling = !!g.fall;
     const stunned = g.stun > 0;
     const pulse = g.state === 'ready' ? 1 + 0.12 * Math.sin(g.readyPulse * 4) : 1;
@@ -1490,12 +1469,12 @@ export function start(canvas) {
       ctx.beginPath(); ctx.arc(fx, fy, sc + 3, 0, TAU); ctx.fill();
       drawItemGlyph(ctx, fx, fy, 'radar', sc, COL.item);
     }
-    // #ラン番号（左下・最下段）。デイリーは日付＋☼マークで示す
+    // #ラン番号（左下・最下段）
     ctx.fillStyle = 'rgba(40,39,35,0.45)';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.font = '600 13px ui-monospace, "SF Mono", Menlo, monospace';
-    ctx.fillText(g.daily ? '☼ ' + g.dateLabel : '#' + g.runNumber, 16, H - 20);
+    ctx.fillText('#' + g.runNumber, 16, H - 20);
 
     // タイトル（ready のときだけ）
     if (g.state === 'ready') {
@@ -1856,7 +1835,7 @@ export function start(canvas) {
       ctx.fillStyle = 'rgba(40,39,35,0.5)';
       ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
       ctx.font = '600 13px ui-monospace, "SF Mono", Menlo, monospace';
-      ctx.fillText(g.daily ? '☼ ' + g.dateLabel : '#' + g.runNumber, bx, by);
+      ctx.fillText('#' + g.runNumber, bx, by);
       // 人アイコン
       const hx = bx + 2, hy = by + 18;
       ctx.beginPath(); ctx.arc(hx, hy - 4, 2.6, 0, TAU); ctx.fill();

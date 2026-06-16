@@ -38,6 +38,16 @@
     .note { color: #4a483f; font-size: 13px; line-height: 1.6; margin: 9px 0 0; }
     .play { color: var(--accent); font-size: 13px; margin-top: 10px; }
     header a.about { color: var(--accent); font-size: 13px; text-decoration: none; letter-spacing: .04em; }
+    a.daily {
+      display: flex; align-items: center; gap: 10px; text-decoration: none; color: inherit;
+      border: 1px solid var(--ink); border-radius: 14px; padding: 14px 18px; margin: 14px 0 18px;
+      background: #fbfbf8; transition: transform .08s ease;
+    }
+    a.daily:active { transform: scale(0.99); }
+    a.daily .sun { font-size: 20px; color: var(--peak); }
+    a.daily .dl-title { font-size: 15px; font-weight: 700; }
+    a.daily .dl-note { color: var(--sub); font-size: 12px; margin-top: 3px; }
+    a.daily .go { margin-left: auto; color: var(--accent); font-size: 13px; }
     footer { color: var(--sub); font-size: 11px; margin: 30px 4px 0; line-height: 1.7; }
   </style>
 </head>
@@ -47,12 +57,28 @@
     <p>等高線の地形を歩く実験。バージョン一覧。</p>
     <p style="margin-top:8px"><a class="about" href="./story.html">→ ストーリー</a>　<a class="about" href="./about.html">→ このゲームのねらい</a></p>
   </header>
+  <a class="daily" href="./p/01-contour/?daily">
+    <span class="sun">☼</span>
+    <span>
+      <span class="dl-title">デイリーチャレンジ</span>
+      <span class="dl-note" id="dl-date">今日の日付がシード・全員同じ地形</span>
+    </span>
+    <span class="go">▶ 今日の地形へ</span>
+  </a>
   <main id="list">読み込み中…</main>
   <footer>
     各カードをタップでその版が遊べます（過去版は当時のまま凍結）。
   </footer>
 
   <script>
+    // デイリーの日付表示（JST = UTC+9）
+    (function () {
+      const d = new Date(Date.now() + 9 * 3600 * 1000);
+      const p2 = (n) => String(n).padStart(2, '0');
+      const label = d.getUTCFullYear() + '-' + p2(d.getUTCMonth() + 1) + '-' + p2(d.getUTCDate());
+      const el = document.getElementById('dl-date');
+      if (el) el.textContent = '☼ ' + label + ' ・ 全員同じ地形';
+    })();
     fetch('./versions.json')
       .then((r) => r.json())
       .then((vs) => {
