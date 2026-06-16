@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -225,7 +225,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v49'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v48'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -960,35 +960,6 @@ export function start(canvas) {
     ctx.lineTo(x + s * 0.9, y + s * 0.7);
     ctx.lineTo(x - s * 0.9, y + s * 0.7);
     ctx.closePath();
-  }
-
-  // 救助ロケット（底辺 = y に着地）。flame=降下中の噴射
-  function drawRocket(x, y, s, flame) {
-    const w = s * 0.55, bodyTop = y - s * 1.9, noseTop = y - s * 2.8;
-    if (flame) {
-      const fl = s * (1.2 + 0.6 * Math.random());
-      ctx.fillStyle = 'rgba(255,170,70,0.9)';
-      ctx.beginPath();
-      ctx.moveTo(x - w * 0.6, y); ctx.lineTo(x + w * 0.6, y); ctx.lineTo(x, y + fl);
-      ctx.closePath(); ctx.fill();
-    }
-    // 機体
-    ctx.fillStyle = '#eef2f4';
-    ctx.beginPath();
-    ctx.moveTo(x - w, y); ctx.lineTo(x - w, bodyTop);
-    ctx.quadraticCurveTo(x - w, noseTop, x, noseTop);
-    ctx.quadraticCurveTo(x + w, noseTop, x + w, bodyTop);
-    ctx.lineTo(x + w, y);
-    ctx.closePath(); ctx.fill();
-    // フィン
-    ctx.fillStyle = COL.accent;
-    ctx.beginPath();
-    ctx.moveTo(x - w, y - s * 0.4); ctx.lineTo(x - w - s * 0.5, y); ctx.lineTo(x - w, y); ctx.closePath();
-    ctx.moveTo(x + w, y - s * 0.4); ctx.lineTo(x + w + s * 0.5, y); ctx.lineTo(x + w, y); ctx.closePath();
-    ctx.fill();
-    // 窓
-    ctx.fillStyle = '#2a7fd0';
-    ctx.beginPath(); ctx.arc(x, bodyTop - s * 0.2, s * 0.26, 0, TAU); ctx.fill();
   }
 
   // ---- 描画: トップダウン（円窓） -----------------------------------------
@@ -1793,20 +1764,25 @@ export function start(canvas) {
       }
     }
 
-    // 最高地点へロケットが降りてくる（＝どこが頂上だったかの答え合わせ）
+    // フィールド最高地点を強調（金色のビーコン）
     const pk = g.field.max;
     const pkr = project(pk.x, pk.y, pk.h);
-    const ROCKET_START = 3.2, ROCKET_DUR = 1.8;
-    if (e.t > ROCKET_START) {
-      const prog = clamp((e.t - ROCKET_START) / ROCKET_DUR, 0, 1);
-      const ry = lerp(-60, pkr.sy, easeOut(prog)); // 上空から着地点へ
-      const landed = prog >= 1;
-      // 着地点の輪（マーカー）
-      ctx.strokeStyle = `rgba(200,146,10,${landed ? 0.5 + 0.3 * Math.sin(e.t * 4) : 0.5})`;
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(pkr.sx, pkr.sy, landed ? 9 : 6, 0, TAU); ctx.stroke();
-      drawRocket(pkr.sx, ry, 9, !landed); // 降下中は噴射
-    }
+    const pkBase = project(pk.x, pk.y, e.gmin);
+    ctx.strokeStyle = 'rgba(200,146,10,0.55)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(pkBase.sx, pkBase.sy);
+    ctx.lineTo(pkr.sx, pkr.sy);
+    ctx.stroke();
+    const pp = (e.t % 1.4) / 1.4;
+    ctx.strokeStyle = `rgba(200,146,10,${0.6 * (1 - pp)})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(pkr.sx, pkr.sy, 6 + pp * 22, 0, TAU);
+    ctx.stroke();
+    ctx.fillStyle = COL.peak;
+    drawTriangle(pkr.sx, pkr.sy - 4, 8);
+    ctx.fill();
 
     if (masking) ctx.restore();
 
