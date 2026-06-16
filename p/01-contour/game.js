@@ -443,11 +443,14 @@ export function start(canvas) {
     fetchGhosts(runNumber);
   }
 
-  // 他プレイヤーの足跡を取得（同シード=同じラン番号）。失敗は無視。
+  // 他プレイヤーの足跡を取得（同シード=同じラン番号）。失敗は無視。範囲外データは除外。
   function fetchGhosts(runNumber) {
+    const lim = CFG.FIELD_R * 1.4;
+    const ok = (r) => Array.isArray(r.path) && r.path.length > 1 &&
+      r.path.every((p) => Math.abs(p[0]) < lim && Math.abs(p[1]) < lim);
     fetch('/api/runs?seed=' + runNumber)
       .then((r) => (r.ok ? r.json() : []))
-      .then((runs) => { if (game && game.runNumber === runNumber && Array.isArray(runs)) game.ghosts = runs; })
+      .then((runs) => { if (game && game.runNumber === runNumber && Array.isArray(runs)) game.ghosts = runs.filter(ok); })
       .catch(() => {});
   }
 

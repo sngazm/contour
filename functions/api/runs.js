@@ -10,13 +10,13 @@ const json = (obj, status = 200) =>
 // 受け取ったランを安全な形に整える（サイズ・型を制限）
 function sanitize(run) {
   const num = (v) => (typeof v === 'number' && isFinite(v) ? v : 0);
+  const cl = (v) => Math.max(-2000, Math.min(2000, Math.round(num(v)))); // フィールド外は丸める
   const path = Array.isArray(run.path)
-    ? run.path.slice(0, 64).map((p) => [Math.round(num(p[0])), Math.round(num(p[1])), +num(p[2]).toFixed(3)])
+    ? run.path.slice(0, 64).map((p) => [cl(p[0]), cl(p[1]), +num(p[2]).toFixed(3)])
     : [];
   return {
     path,
     best: num(run.best) | 0,
-    bonus: num(run.bonus) | 0,
     flagged: !!run.flagged,
     t: Date.now(),
   };
