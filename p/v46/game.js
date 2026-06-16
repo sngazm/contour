@@ -1,14 +1,14 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
   HP_WALK: 0.035,         // 平地を歩く消費(体力/秒)
   HP_CLIMB_K: 380,        // 登りで増える消費の強さ
-  FALL_DAMAGE: 0.2,       // 転落1回のダメージ(発生時に一括・約20%)
+  HP_FALL: 0.6,           // 転落中の消費(体力/秒)＝急激
   HEAL: 0.35,             // ドリンク1本の回復量
   HEALTH_LAG: 2.6,        // ダメージ/回復の追従(格ゲー風)速度
   VIEW_RADIUS_WORLD: 235, // 既定(最ズームイン)の視界半径
@@ -224,7 +224,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v47'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v46'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -609,6 +609,7 @@ export function start(canvas) {
         const spd = Math.hypot(g.fall.vx, g.fall.vy);
         if (spd > 1e-4) { g.moveDir.x = g.fall.vx / spd; g.moveDir.y = g.fall.vy / spd; }
         g.curSpeed = spd / CFG.BASE_SPEED;
+        drain = CFG.HP_FALL; // 転落は急激に消費
         if (steep < CFG.FALL_RECOVER && spd < 70) {
           // 緩斜面で停止 → 落下時間に応じて放心(1〜3秒)
           g.stun = clamp(g.fall.t * 1.3, 1, 3);
@@ -629,7 +630,6 @@ export function start(canvas) {
         const climbing = mv.mag > 0.25 && (grad.x * mv.x + grad.y * mv.y) > 0; // 上りへ踏ん張る
         if (steep > climbMax || (steep > fallS && !climbing)) {
           g.fall = { vx: 0, vy: 0, t: 0 };
-          g.health = clamp(g.health - CFG.FALL_DAMAGE, 0, 1); // 転落ダメージ(約20%)
           moved = true;
         } else if (mv.mag > 0) {
           // 進行方向の±一定距離の平均勾配（瞬間の凹凸でガタつかせない）
@@ -746,7 +746,6 @@ export function start(canvas) {
             n.down = CFG.NPC_DOWN; n.chaseT = 0;
           } else if (g.grace <= 0 && n.satT <= 0) {
             g.fall = { vx: ux * CFG.NPC_PUSH_SPEED, vy: uy * CFG.NPC_PUSH_SPEED, t: 0 };
-            g.health = clamp(g.health - CFG.FALL_DAMAGE, 0, 1);
             n.x -= ux * 30; n.y -= uy * 30;
             anyPush = true;
           }
@@ -969,12 +968,6 @@ export function start(canvas) {
     const sightR = lerp(NORMAL, 2 * CFG.FIELD_R, blend);    // 見通せる距離（遮蔽だけが限界）
     const ppu = R / frameR;
     const CELL = (2 * frameR) / (N - 1);
-    // レーダー（ズームアウト）表示：ダークなレーダー画面＋波紋
-    const radarView = blend > 0.5;
-    const playerH = g.terrain.height(g.px, g.py);
-    const psxR = cx + (g.px - camx) * ppu, psyR = cy + (g.py - camy) * ppu; // レーダー原点(自分)
-    const pingT = (g.time % 2.2) / 2.2;       // 波紋の位相
-    const pingR = pingT * (R * 1.25);          // 波紋の半径(画面px)
 
     ctx.fillStyle = COL.out;
     ctx.fillRect(0, 0, W, H);
@@ -1024,33 +1017,13 @@ export function start(canvas) {
           const k00 = j * nx + i, k10 = j * nx + i2, k01 = j2 * nx + i, k11 = j2 * nx + i2;
           const h = grid[k00] * w00 + grid[k10] * w10 + grid[k01] * w01 + grid[k11] * w11;
           const rv = gridRV[k00] * w00 + gridRV[k10] * w10 + gridRV[k01] * w01 + gridRV[k11] * w11;
+          const c = h < ALT_TH[0] ? ALT4[0] : h < ALT_TH[1] ? ALT4[1] : h < ALT_TH[2] ? ALT4[2] : ALT4[3];
+          const shade = SHADE_LO + (SHADE_HI - SHADE_LO) * clamp(0.5 + rv * scale, 0, 1);
           const idx = (v * M + u) * 4;
-          if (radarView) {
-            // ダークなレーダー配色：自分より高い所は明るいティール、低い所は目立たない
-            const rvN = clamp(0.5 + rv * scale, 0, 1);
-            let rr, gg, bb;
-            if (h >= playerH) {
-              const up = clamp((h - playerH) * 7, 0, 1);
-              const b = 0.5 + 0.5 * up + 0.25 * (rvN - 0.5);
-              rr = 24 + 70 * b; gg = 70 + 150 * b; bb = 80 + 120 * b;
-            } else {
-              const lo = 14 + 16 * rvN; // 低地は低コントラストの暗色
-              rr = lo * 0.8; gg = lo; bb = lo * 1.1;
-            }
-            // 波紋が通過した所を一瞬照らす
-            const wx = ox0 + gxf * CELL, wy = oy0 + gyf * CELL;
-            const sd = Math.hypot(wx - g.px, wy - g.py) * ppu;
-            const glow = Math.exp(-((sd - pingR) / 26) * ((sd - pingR) / 26));
-            rr += glow * 90; gg += glow * 120; bb += glow * 130;
-            d[idx] = Math.min(255, rr); d[idx + 1] = Math.min(255, gg); d[idx + 2] = Math.min(255, bb); d[idx + 3] = 255;
-          } else {
-            const c = h < ALT_TH[0] ? ALT4[0] : h < ALT_TH[1] ? ALT4[1] : h < ALT_TH[2] ? ALT4[2] : ALT4[3];
-            const shade = SHADE_LO + (SHADE_HI - SHADE_LO) * clamp(0.5 + rv * scale, 0, 1);
-            d[idx] = Math.min(255, c[0] * shade);
-            d[idx + 1] = Math.min(255, c[1] * shade);
-            d[idx + 2] = Math.min(255, c[2] * shade);
-            d[idx + 3] = 255;
-          }
+          d[idx] = Math.min(255, c[0] * shade);
+          d[idx + 1] = Math.min(255, c[1] * shade);
+          d[idx + 2] = Math.min(255, c[2] * shade);
+          d[idx + 3] = 255;
         }
       }
       shadeCtx.putImageData(img, 0, 0);
@@ -1095,7 +1068,7 @@ export function start(canvas) {
     ctx.beginPath();
     ctx.arc(cx, cy, R, 0, TAU);
     ctx.clip();
-    ctx.fillStyle = radarView ? '#0b161a' : COL.lens; // レーダーは暗い地
+    ctx.fillStyle = COL.lens;
     ctx.fillRect(cx - R, cy - R, 2 * R, 2 * R);
 
     if (occlude) {
@@ -1107,56 +1080,29 @@ export function start(canvas) {
       ctx.closePath();
       ctx.clip();
       drawTint();
-      if (!radarView) drawContours();
+      drawContours();
       ctx.restore();
 
-      // 遮蔽された側を伏せる（多角形を穴にした even-odd 塗り）
+      // 遮蔽された側はもやで埋める（多角形を穴にした even-odd 塗り）
       ctx.beginPath();
       ctx.rect(cx - R, cy - R, 2 * R, 2 * R);
       ctx.moveTo(poly[0][0], poly[0][1]);
       for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
       ctx.closePath();
-      ctx.fillStyle = radarView ? '#0b161a' : 'rgba(231,229,222,0.7)';
+      ctx.fillStyle = 'rgba(231,229,222,0.7)'; // 未踏の白地図ふうに軽く伏せる
       ctx.fill('evenodd');
 
-      // 地平線（壁にぶつかって見えない縁）。レーダーは青白く光らせる
+      // 地平線（尾根の稜線）を淡く
       ctx.beginPath();
       ctx.moveTo(poly[0][0], poly[0][1]);
       for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
       ctx.closePath();
-      if (radarView) {
-        ctx.save();
-        ctx.strokeStyle = 'rgba(180,225,255,0.9)';
-        ctx.shadowColor = 'rgba(150,210,255,0.9)';
-        ctx.shadowBlur = 8;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        ctx.restore();
-      } else {
-        ctx.strokeStyle = 'rgba(40,39,35,0.22)';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      }
+      ctx.strokeStyle = 'rgba(40,39,35,0.22)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
     } else {
       drawTint();
       drawContours();
-    }
-
-    // レーダーの波紋（自分から同心円が広がる）
-    if (radarView) {
-      ctx.save();
-      ctx.shadowColor = 'rgba(150,220,255,0.8)';
-      ctx.shadowBlur = 6;
-      for (let s = 0; s < 2; s++) {
-        const ph = (pingT + s * 0.5) % 1;
-        const rad = ph * (R * 1.25);
-        ctx.strokeStyle = `rgba(170,225,255,${0.55 * (1 - ph)})`;
-        ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.arc(psxR, psyR, rad, 0, TAU); ctx.stroke();
-      }
-      ctx.fillStyle = 'rgba(180,230,255,0.95)';
-      ctx.beginPath(); ctx.arc(psxR, psyR, 3, 0, TAU); ctx.fill();
-      ctx.restore();
     }
 
     // ある地点が今の視界で見えているか（視界半径内＋視線が通る）
