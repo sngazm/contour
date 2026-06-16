@@ -1363,11 +1363,20 @@ export function start(canvas) {
       const pc = [Math.round(lerp(70, 224, pace)), Math.round(lerp(150, 110, pace)), Math.round(lerp(120, 60, pace))];
       ctx.strokeStyle = `rgb(${pc[0]},${pc[1]},${pc[2]})`;
       ctx.beginPath(); ctx.arc(cx, cy, rr, A0, A0 + Math.min(hp, lag) * TAU); ctx.stroke();
-      // O2 表記（リング上端）
+      // O₂ 表記（2 は下付き）。リング上端
       ctx.fillStyle = `rgb(${pc[0]},${pc[1]},${pc[2]})`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.font = '700 12px ui-monospace, "SF Mono", Menlo, monospace';
-      ctx.fillText('O2', cx, cy - rr - 11);
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      const oy2 = cy - rr - 11;
+      ctx.font = '700 13px ui-monospace, "SF Mono", Menlo, monospace';
+      const wO = ctx.measureText('O').width;
+      ctx.font = '700 9px ui-monospace, "SF Mono", Menlo, monospace';
+      const w2 = ctx.measureText('2').width;
+      const x0 = cx - (wO + w2) / 2;
+      ctx.font = '700 13px ui-monospace, "SF Mono", Menlo, monospace';
+      ctx.fillText('O', x0, oy2);
+      ctx.font = '700 9px ui-monospace, "SF Mono", Menlo, monospace';
+      ctx.fillText('2', x0 + wO, oy2 + 3);
     }
 
     // プレイヤー（通常は中央。引き時はマップ上の実位置に）。転落中はアクセント色＆回転
