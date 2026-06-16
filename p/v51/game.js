@@ -1,25 +1,20 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
-  HP_WALK: 0.020,         // 平地を歩く消費(体力/秒・平地は少なめ)
+  HP_WALK: 0.035,         // 平地を歩く消費(体力/秒)
   HP_CLIMB_K: 380,        // 登りで増える消費の強さ
-  HP_DESC_K: 240,         // 下りで増える消費の強さ(登りより軽め)
-  FALL_LAND_K: 2.6,       // 着地ダメージ＝転落した高さ×これ
-  FALL_LAND_MIN: 0.06,    // 着地ダメージの下限
-  FALL_LAND_MAX: 0.9,     // 着地ダメージの上限(大転落はほぼ致命)
-  STUN_RED: 1.0,          // 着地後に赤く固まる演出時間(操作不能)
-  STUN_SHAKE: 0.32,       // 黒に戻ってブルっと震える時間(操作不能)
+  FALL_DAMAGE: 0.2,       // 転落1回のダメージ(発生時に一括・約20%)
   HEAL: 0.35,             // ドリンク1本の回復量
   HP_MAX: 2,              // 酸素の上限(最大値以上を取れる＝2周目は外側のリング)
   HEALTH_LAG: 2.6,        // ダメージ/回復の追従(格ゲー風)速度
   RADAR_MIN: 480,         // 低地でのレーダー到達距離(高所ほど伸びる)
   VIEW_RADIUS_WORLD: 235, // 既定(低地・最ズームイン)の視界半径
-  HIGH_VIEW_R: 700,       // 高所での視界半径(登るほど引いて見晴らしUP・控えめ)
+  HIGH_VIEW_R: 1000,      // 高所での視界半径(登るほど引いて見晴らしUP・最大でマップの約半分)
   ALWAYS_R: 80,           // 常に見える近距離バブル(これより外は視線遮蔽)
   ZOOM_MAX_R: 1500,       // ピンチアウトで見渡せる最大の視界半径
   GRID_N: 84,             // 等高線サンプルの格子解像度(ズームに依らず一定負荷)
@@ -233,7 +228,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v52'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v51'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -446,9 +441,9 @@ export function start(canvas) {
       pickups: spawnPickups(terrain, CFG.FIELD_R),
       npcs: spawnNpcs(CFG.FIELD_R),
       riding: null,         // ジップライン移動中の目標 {tx,ty}
-      fall: null,           // 転落中の速度 {vx,vy,t,h0}（操作不能）
-      stun: 0,              // 着地後に赤く固まる演出時間(操作不能)
-      recoverShake: 0,      // 黒に戻ってブルっと震える時間(操作不能)
+      fall: null,           // 転落中の速度 {vx,vy,t}（操作不能）
+      stun: 0,              // 転落後の放心時間(操作不能)
+      stunMax: 0,
       grace: 0,             // 復帰直後の無敵(突かれない)時間
       curSpeed: 0,          // 現在の速度係数(描画の線長に使用)
       tremble: 0,           // 転落しきい値への近さ(プレイヤーの震え)
@@ -638,23 +633,16 @@ export function start(canvas) {
         if (spd > 1e-4) { g.moveDir.x = g.fall.vx / spd; g.moveDir.y = g.fall.vy / spd; }
         g.curSpeed = spd / CFG.BASE_SPEED;
         if (steep < CFG.FALL_RECOVER && spd < 70) {
-          // 着地：落ちた高さに応じて大ダメージ → 1秒赤く固まる演出へ
-          const drop = Math.max(0, g.fall.h0 - g.terrain.height(g.px, g.py));
-          const dmg = clamp(drop * CFG.FALL_LAND_K, CFG.FALL_LAND_MIN, CFG.FALL_LAND_MAX);
-          g.health = clamp(g.health - dmg, 0, CFG.HP_MAX);
+          // 緩斜面で停止 → 落下時間に応じて放心(1〜3秒)
+          g.stun = clamp(g.fall.t * 1.3, 1, 3);
+          g.stunMax = g.stun;
           g.fall = null;
-          g.stun = CFG.STUN_RED;
-          if (g.health <= 0) { beginEnd(); return; }
         }
         moved = true;
       } else if (g.stun > 0) {
-        // 放心(演出)：1秒赤く固まる。操作不能。終わると「ブルっと震え」へ
+        // 放心：操作不能でその場に。復帰時に無敵猶予を付与（ハメ防止）
         g.stun -= dt;
-        if (g.stun <= 0) { g.stun = 0; g.recoverShake = CFG.STUN_SHAKE; }
-      } else if (g.recoverShake > 0) {
-        // 黒に戻ってブルっと震える。終わったら操作可能（ハメ防止の無敵猶予つき）
-        g.recoverShake -= dt;
-        if (g.recoverShake <= 0) { g.recoverShake = 0; g.grace = CFG.PUSH_GRACE; }
+        if (g.stun <= 0) g.grace = CFG.PUSH_GRACE;
       } else {
         const mv = input.read();
         // 転落判定：急すぎる／急斜面で登っていない なら転がり落ちる
@@ -666,8 +654,8 @@ export function start(canvas) {
         const thr = climbing ? climbMax : fallS;
         g.tremble = clamp((steep - thr * CFG.TREMBLE_FROM) / (thr * (1 - CFG.TREMBLE_FROM)), 0, 1);
         if (steep > climbMax || (steep > fallS && !climbing)) {
-          // 転落開始：ダメージは着地時に「落ちた高さ」に応じて発生
-          g.fall = { vx: 0, vy: 0, t: 0, h0: g.terrain.height(g.px, g.py) };
+          g.fall = { vx: 0, vy: 0, t: 0 };
+          g.health = clamp(g.health - CFG.FALL_DAMAGE, 0, 1); // 転落ダメージ(約20%)
           moved = true;
         } else if (mv.mag > 0) {
           // 進行方向の±一定距離の平均勾配（瞬間の凹凸でガタつかせない）
@@ -681,9 +669,7 @@ export function start(canvas) {
           g.py += mv.y * sp;
           g.moveDir.x = mv.x; g.moveDir.y = mv.y;
           g.curSpeed = f * mv.mag; // 実際の速度係数
-          // 平地は少なめ。登り・下りとも傾斜に応じて増える（登りの方が重い）
-          const slopeCost = along > 0 ? along * CFG.HP_CLIMB_K : -along * CFG.HP_DESC_K;
-          drain = CFG.HP_WALK * mv.mag * (1 + slopeCost);
+          drain = CFG.HP_WALK * mv.mag * (1 + Math.max(0, along) * CFG.HP_CLIMB_K); // 登りほど消費
           moved = true;
         }
       }
@@ -785,8 +771,8 @@ export function start(canvas) {
             n.fvx = -ux * CFG.NPC_PUSH_SPEED; n.fvy = -uy * CFG.NPC_PUSH_SPEED;
             n.down = CFG.NPC_DOWN; n.chaseT = 0;
           } else if (g.grace <= 0 && n.satT <= 0) {
-            // 突き落とされる：着地時に高さ分のダメージ（転落と同じ仕組み）
-            g.fall = { vx: ux * CFG.NPC_PUSH_SPEED, vy: uy * CFG.NPC_PUSH_SPEED, t: 0, h0: g.terrain.height(g.px, g.py) };
+            g.fall = { vx: ux * CFG.NPC_PUSH_SPEED, vy: uy * CFG.NPC_PUSH_SPEED, t: 0 };
+            g.health = clamp(g.health - CFG.FALL_DAMAGE, 0, 1);
             n.x -= ux * 30; n.y -= uy * 30;
             anyPush = true;
           }
@@ -1343,22 +1329,18 @@ export function start(canvas) {
     }
 
 
-    // フィールド境界（世界の縁）。外側はモヤがかかって徐々に見えなくなる
+    // フィールド境界（世界の縁）。外側を陰らせ、縁を線で示す
     {
       const bx = wsx(0), by = wsy(0);
       const br = g.field.r * ppu;
-      const fc = radarView ? '11,22,26' : '247,246,242'; // モヤの色（レーダーは暗い）
-      const band = 150; // モヤで霞んでいく幅(px)
-      const fog = ctx.createRadialGradient(bx, by, br, bx, by, br + band);
-      fog.addColorStop(0, `rgba(${fc},0)`);
-      fog.addColorStop(0.55, `rgba(${fc},0.8)`);
-      fog.addColorStop(1, `rgba(${fc},1)`); // 完全に覆って向こうは見えない
-      ctx.fillStyle = fog;
-      ctx.fillRect(cx - R, cy - R, 2 * R, 2 * R);
-      // 縁をうっすら示す破線（モヤの中にぼんやり）
+      ctx.beginPath();
+      ctx.rect(cx - R, cy - R, 2 * R, 2 * R);
+      ctx.arc(bx, by, br, 0, TAU);
+      ctx.fillStyle = 'rgba(70,66,58,0.32)'; // 圏外を陰らせる
+      ctx.fill('evenodd');
       ctx.setLineDash([7, 7]);
-      ctx.strokeStyle = radarView ? 'rgba(150,210,255,0.25)' : 'rgba(40,39,35,0.22)';
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = 'rgba(40,39,35,0.5)';
+      ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(bx, by, br, 0, TAU);
       ctx.stroke();
@@ -1428,18 +1410,17 @@ export function start(canvas) {
     // プレイヤー（通常は中央。引き時はマップ上の実位置に）。転落中はアクセント色＆回転
     const mv = input.read();
     let psx = wsx(g.px), psy = wsy(g.py);
-    const falling = !!g.fall;
-    const stunned = g.stun > 0;        // 着地後に赤く固まる
-    const recovering = g.recoverShake > 0; // 黒に戻ってブルっと震える
-    // 震え：崖っぷちの危うさ／復帰時のブルっと（復帰は黒のまま強めに揺らす）
-    const trm = recovering ? 1 : (g.tremble || 0);
-    if (trm > 0 && !g.fall && !stunned) {
-      const amp = recovering ? 5.5 : trm * trm * 4.5;
+    // 転落しきい値に近いほど小刻みに震える（崖っぷちの危うさ）
+    const trm = g.tremble || 0;
+    if (trm > 0 && !g.fall) {
+      const amp = trm * trm * 4.5;
       psx += (Math.random() - 0.5) * 2 * amp;
       psy += (Math.random() - 0.5) * 2 * amp;
     }
+    const falling = !!g.fall;
+    const stunned = g.stun > 0;
     const pulse = g.state === 'ready' ? 1 + 0.12 * Math.sin(g.readyPulse * 4) : 1;
-    ctx.fillStyle = (falling || stunned) ? COL.accent : '#26251f'; // 赤=転落/放心、黒=通常/復帰
+    ctx.fillStyle = (falling || stunned) ? COL.accent : '#26251f';
     ctx.beginPath();
     ctx.arc(psx, psy, 7 * pulse, 0, TAU);
     ctx.fill();
@@ -1448,7 +1429,14 @@ export function start(canvas) {
     ctx.beginPath();
     ctx.arc(psx, psy, 13 * pulse, 0, TAU);
     ctx.stroke();
-    if (falling) {
+    if (stunned) {
+      const frac = clamp(g.stun / (g.stunMax || 1), 0, 1);
+      ctx.strokeStyle = COL.accent;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(psx, psy, 17, -Math.PI / 2, -Math.PI / 2 + frac * TAU);
+      ctx.stroke();
+    } else if (falling) {
       const ang = g.time * 16;
       ctx.strokeStyle = COL.accent;
       ctx.lineWidth = 2.5;
