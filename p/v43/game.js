@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 60,           // 1ゲームの長さ(秒)
@@ -154,7 +154,6 @@ function setupGL(gl) {
   const xform = (fn) => { const o = {}; for (const n of TUN) o[n] = fn('u' + n[0].toUpperCase() + n.slice(1)); return o; };
   return {
     vbo: gl.createBuffer(), ibo: gl.createBuffer(), pbo: gl.createBuffer(), dbo: gl.createBuffer(),
-    gpbo: gl.createBuffer(), gdbo: gl.createBuffer(), // ゴースト用（リボン/円）
     terr: {
       prog: pTerr,
       aPos: gl.getAttribLocation(pTerr, 'aPos'), aH: gl.getAttribLocation(pTerr, 'aH'), aRV: gl.getAttribLocation(pTerr, 'aRV'),
@@ -817,7 +816,7 @@ export function start(canvas) {
         h: Float32Array.from(sh), n: sh.length,
       },
       cam: { yaw: 0, yawVel: 0, zoom: 1, tiltOff: 0, touched: false },
-      glCount: 0, glPathCount: 0, glDiscCount: 0, ghostBuilt: false, gpCount: 0, gdCount: 0,
+      glCount: 0, glPathCount: 0, glDiscCount: 0,
     };
     // WebGL 用メッシュをアップロード（頂点= worldX,worldY,height,rv / 三角形インデックス）
     if (glR) {
@@ -1440,59 +1439,34 @@ export function start(canvas) {
       gl.uniform1f(u.step, CFG.CONTOUR_STEP);
       gl.drawElements(gl.TRIANGLES, e.glCount, gl.UNSIGNED_SHORT, 0);
 
-      // 経路チューブの再生：自分（朱）→他人（グレー・細め）の順に伸びる
-      const Ln = glR.line, Dz = glR.disc;
-      const drawTube = (pbo, ribCount, dbo, discCount, prog, halfW, col) => {
-        if (prog <= 0 || ribCount <= 0) return;
+      // 経路リボン（同じ深度バッファに描く→山に隠れる）
+      if (e.glPathCount > 0) {
+        const Ln = glR.line;
         gl.useProgram(Ln.prog);
-        gl.bindBuffer(gl.ARRAY_BUFFER, pbo);
+        gl.bindBuffer(gl.ARRAY_BUFFER, glR.pbo);
         gl.enableVertexAttribArray(Ln.aPos); gl.vertexAttribPointer(Ln.aPos, 2, gl.FLOAT, false, 28, 0);
         gl.enableVertexAttribArray(Ln.aH); gl.vertexAttribPointer(Ln.aH, 1, gl.FLOAT, false, 28, 8);
         gl.enableVertexAttribArray(Ln.aPos2); gl.vertexAttribPointer(Ln.aPos2, 2, gl.FLOAT, false, 28, 12);
         gl.enableVertexAttribArray(Ln.aH2); gl.vertexAttribPointer(Ln.aH2, 1, gl.FLOAT, false, 28, 20);
         gl.enableVertexAttribArray(Ln.aSide); gl.vertexAttribPointer(Ln.aSide, 1, gl.FLOAT, false, 28, 24);
-        setX(Ln.u); gl.uniform1f(Ln.u.halfW, halfW);
-        gl.uniform4f(Ln.u.color, col[0], col[1], col[2], 1.0);
-        gl.drawArrays(gl.TRIANGLES, 0, Math.floor((ribCount / 6) * prog) * 6);
-        if (discCount > 0) {
-          gl.useProgram(Dz.prog);
-          gl.bindBuffer(gl.ARRAY_BUFFER, dbo);
-          gl.enableVertexAttribArray(Dz.aPos); gl.vertexAttribPointer(Dz.aPos, 2, gl.FLOAT, false, 20, 0);
-          gl.enableVertexAttribArray(Dz.aH); gl.vertexAttribPointer(Dz.aH, 1, gl.FLOAT, false, 20, 8);
-          gl.enableVertexAttribArray(Dz.aCorner); gl.vertexAttribPointer(Dz.aCorner, 2, gl.FLOAT, false, 20, 12);
-          setX(Dz.u); gl.uniform1f(Dz.u.halfW, halfW);
-          gl.uniform4f(Dz.u.color, col[0], col[1], col[2], 1.0);
-          gl.drawArrays(gl.TRIANGLES, 0, Math.floor((discCount / 6) * prog) * 6);
-        }
-      };
-      // ゴーストのチューブ幾何を一度だけ生成
-      if (g.ghosts && g.ghosts.length && !e.ghostBuilt) {
-        const bias = 0.022, pv = [], dv = [];
-        for (const gh of g.ghosts) {
-          const pa = gh.path; if (!pa || pa.length < 2) continue;
-          for (let i = 0; i + 1 < pa.length; i++) {
-            const a = pa[i], b = pa[i + 1];
-            const ax = a[0], ay = a[1], ah = a[2] + bias, bx = b[0], by = b[1], bh = b[2] + bias;
-            pv.push(ax, ay, ah, bx, by, bh, 1, ax, ay, ah, bx, by, bh, -1, bx, by, bh, ax, ay, ah, -1,
-                    bx, by, bh, ax, ay, ah, -1, ax, ay, ah, bx, by, bh, -1, bx, by, bh, ax, ay, ah, 1);
-          }
-          for (let i = 0; i < pa.length; i++) {
-            const px = pa[i][0], py = pa[i][1], ph = pa[i][2] + bias;
-            dv.push(px, py, ph, -1, -1, px, py, ph, 1, -1, px, py, ph, 1, 1, px, py, ph, -1, -1, px, py, ph, 1, 1, px, py, ph, -1, 1);
-          }
-        }
-        gl.bindBuffer(gl.ARRAY_BUFFER, glR.gpbo); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pv), gl.STATIC_DRAW);
-        gl.bindBuffer(gl.ARRAY_BUFFER, glR.gdbo); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(dv), gl.STATIC_DRAW);
-        e.gpCount = pv.length / 7; e.gdCount = dv.length / 5; e.ghostBuilt = true;
+        setX(Ln.u);
+        gl.uniform1f(Ln.u.halfW, 2.3); // スクリーン上の半幅(px)
+        gl.uniform4f(Ln.u.color, 0.88, 0.32, 0.18, 1.0); // アクセント
+        gl.depthMask(false);
+        gl.drawArrays(gl.TRIANGLES, 0, e.glPathCount);
+        // ラウンド接合＋丸キャップ
+        const Dz = glR.disc;
+        gl.useProgram(Dz.prog);
+        gl.bindBuffer(gl.ARRAY_BUFFER, glR.dbo);
+        gl.enableVertexAttribArray(Dz.aPos); gl.vertexAttribPointer(Dz.aPos, 2, gl.FLOAT, false, 20, 0);
+        gl.enableVertexAttribArray(Dz.aH); gl.vertexAttribPointer(Dz.aH, 1, gl.FLOAT, false, 20, 8);
+        gl.enableVertexAttribArray(Dz.aCorner); gl.vertexAttribPointer(Dz.aCorner, 2, gl.FLOAT, false, 20, 12);
+        setX(Dz.u);
+        gl.uniform1f(Dz.u.halfW, 2.3);
+        gl.uniform4f(Dz.u.color, 0.88, 0.32, 0.18, 1.0);
+        gl.drawArrays(gl.TRIANGLES, 0, e.glDiscCount);
+        gl.depthMask(true);
       }
-      // 再生タイミング
-      const pbStart = 0.7, ownDur = 1.3, gap = 0.3, ghostDur = 1.8;
-      const ownProg = clamp((e.t - pbStart) / ownDur, 0, 1);
-      const ghostProg = clamp((e.t - pbStart - ownDur - gap) / ghostDur, 0, 1);
-      gl.depthMask(false);
-      if (e.ghostBuilt) drawTube(glR.gpbo, e.gpCount, glR.gdbo, e.gdCount, ghostProg, 1.5, [0.42, 0.40, 0.36]);
-      drawTube(glR.pbo, e.glPathCount, glR.dbo, e.glDiscCount, ownProg, 2.3, [0.88, 0.32, 0.18]);
-      gl.depthMask(true);
     }
 
     // イントロ序盤は円窓が開いていくように見せる
@@ -1572,8 +1546,8 @@ export function start(canvas) {
       ctx.globalCompositeOperation = 'source-over';
     }
 
-    // 他プレイヤーの足跡（GL不可時のみ2Dの薄線で。GL時はグレーのチューブで再生）
-    if (!useGL && g.ghosts && g.ghosts.length) {
+    // 他プレイヤーの足跡（ゴースト）。薄く重ねると人気ルートが濃く見える
+    if (g.ghosts && g.ghosts.length) {
       ctx.strokeStyle = 'rgba(70,66,58,0.16)';
       ctx.lineWidth = 1.2;
       for (const gh of g.ghosts) {
