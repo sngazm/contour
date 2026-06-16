@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 60,           // 1ゲームの長さ(秒)
@@ -379,13 +379,17 @@ export function start(canvas) {
     return v.length < 2 ? 0 : Math.hypot(v[0].x - v[1].x, v[0].y - v[1].y);
   };
 
-  // 右下の旗ボタン。押すとその場に旗を立てて即終了。最高点付近では強調(.hot)。
+  // 右下のレーダーボタン（所持時に表示）。押すと1回ズームアウトして偵察できる。
   const viewBtn = document.getElementById('viewbtn');
-  const ICON_FLAG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 21V4"/><path d="M6 4.5h11l-2.6 3.3L17 11H6"/></svg>';
+  const ICON_RADAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 12l8-5"/></svg>';
   if (viewBtn) {
-    viewBtn.innerHTML = ICON_FLAG;
+    viewBtn.innerHTML = ICON_RADAR;
     viewBtn.addEventListener('click', () => {
-      if (game.state === 'play') { game.flagged = true; beginEnd(); }
+      const g = game;
+      if (g.state === 'play' && g.radar > 0 && !g.far) {
+        g.far = true; g.radar -= 1;
+        g.marks.push({ x: g.px, y: g.py, h: g.terrain.height(g.px, g.py), type: 'scan' });
+      }
     });
   }
 
@@ -432,7 +436,7 @@ export function start(canvas) {
     input.state.zoomReq = 0;
     endPointers.clear();
     endGesture = null;
-    if (viewBtn) { viewBtn.style.display = 'none'; viewBtn.classList.remove('hot'); }
+    if (viewBtn) viewBtn.style.display = 'none';
     fetchGhosts(runNumber);
   }
 
@@ -509,16 +513,13 @@ export function start(canvas) {
     }
   });
   window.addEventListener('pointerup', () => {
-    // プレイ中：中央（自分）付近の短いタップ＝レーダー偵察（所持時）
-    if (game.state === 'play' && !game.far && game.radar > 0 && playTap && !playTap.moved &&
+    // プレイ中：中央付近の短いタップ＝旗を立てて即終了
+    if (game.state === 'play' && !game.far && playTap && !playTap.moved &&
         performance.now() - playTap.t < 300) {
       const r = canvas.getBoundingClientRect();
       const dxc = (playTap.x - r.left) - r.width / 2;
       const dyc = (playTap.y - r.top) - r.height / 2;
-      if (Math.hypot(dxc, dyc) < 64) {
-        game.far = true; game.radar -= 1;
-        game.marks.push({ x: game.px, y: game.py, h: game.terrain.height(game.px, game.py), type: 'scan' });
-      }
+      if (Math.hypot(dxc, dyc) < 64) { game.flagged = true; beginEnd(); }
     }
     playTap = null;
   });
@@ -550,12 +551,7 @@ export function start(canvas) {
       if (g.far && input.read().mag > 0) g.far = false; // 動き出したら偵察解除
       const target = g.far ? CFG.ZOOM_MAX_R : CFG.VIEW_RADIUS_WORLD;
       g.viewR += (target - g.viewR) * Math.min(1, dt * 8);
-      // 旗ボタン：プレイ中は常時表示。最高点付近(=記録が目標に肉薄)で強調
-      if (viewBtn) {
-        viewBtn.style.display = g.state === 'play' ? '' : 'none';
-        const nearTop = g.terrain.height(g.px, g.py) >= g.field.max.h - 1.5 * CFG.CONTOUR_STEP;
-        viewBtn.classList.toggle('hot', g.state === 'play' && nearTop);
-      }
+      if (viewBtn) viewBtn.style.display = (g.state === 'play' && g.radar > 0 && !g.far) ? '' : 'none';
     }
     if (g.state === 'ready') {
       g.readyPulse += dt;
@@ -873,7 +869,7 @@ export function start(canvas) {
     g.state = 'end';
     endPointers.clear();
     endGesture = null;
-    if (viewBtn) { viewBtn.style.display = 'none'; viewBtn.classList.remove('hot'); }
+    if (viewBtn) viewBtn.style.display = 'none';
   }
 
   // 数値表示（★=自己記録 / ▲=目標 / ●=現在地 / ✦=ボーナス）。常時表示。
@@ -1287,16 +1283,6 @@ export function start(canvas) {
       ctx.stroke();
     }
 
-    // レーダー所持中：プレイヤーを脈打つ青緑の輪で強調＝中央タップできる合図
-    if (g.radar > 0 && !falling && !stunned && g.state === 'play') {
-      const rp = ((g.time + g.readyPulse) % 1.1) / 1.1;
-      ctx.strokeStyle = `rgba(31,138,138,${0.7 * (1 - rp)})`;
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(psx, psy, 14 + rp * 20, 0, TAU);
-      ctx.stroke();
-    }
-
     if (g.flash > 0) {
       const fr = 1 - g.flash / 0.7;
       ctx.strokeStyle = `rgba(224,81,46,${0.75 * (1 - fr)})`;
@@ -1666,21 +1652,6 @@ export function start(canvas) {
     }
 
     drawHud(ep.h, g.field.max.h, g.best, 0, g.bonus);
-
-    // ラン番号（#N）と、この地形を遊んだ人数（人アイコン＋数）を小さく
-    {
-      const players = (g.ghosts ? g.ghosts.length : 0) + 1;
-      const bx = 18, by = H - 24;
-      ctx.fillStyle = 'rgba(40,39,35,0.5)';
-      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-      ctx.font = '600 13px ui-monospace, "SF Mono", Menlo, monospace';
-      ctx.fillText('#' + g.runNumber, bx, by);
-      // 人アイコン
-      const hx = bx + 2, hy = by + 18;
-      ctx.beginPath(); ctx.arc(hx, hy - 4, 2.6, 0, TAU); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(hx - 4, hy + 4); ctx.quadraticCurveTo(hx, hy - 2, hx + 4, hy + 4); ctx.closePath(); ctx.fill();
-      ctx.fillText(String(players), hx + 10, hy);
-    }
 
     // 再挑戦を促す微かなパルス（イントロ後・言葉なし）
     if (e.t > 2.2) {

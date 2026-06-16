@@ -20,13 +20,8 @@
       -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); touch-action: manipulation;
     }
     #viewbtn svg { width: 24px; height: 24px; display: block; }
+    #viewbtn.far { background: #26251f; color: #f7f6f2; border-color: #26251f; }
     #viewbtn:active { transform: scale(0.94); }
-    /* 最高点付近で旗ボタンを強調（言葉なし・脈動） */
-    #viewbtn.hot { color: #f7f6f2; background: #e0512e; border-color: #e0512e; animation: flagpulse 1s ease-in-out infinite; }
-    @keyframes flagpulse {
-      0%, 100% { box-shadow: 0 0 0 0 rgba(224,81,46,0.55); }
-      50% { box-shadow: 0 0 0 10px rgba(224,81,46,0); }
-    }
 
     #vlink {
       position: fixed; left: 50%; transform: translateX(-50%);
@@ -38,7 +33,7 @@
 </head>
 <body>
   <canvas id="c"></canvas>
-  <button id="viewbtn" aria-label="flag"></button>
+  <button id="viewbtn" aria-label="view"></button>
   <a id="vlink" href="../../">≡ versions</a>
   <script type="module">
     import { start } from './game.js';
