@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -10,11 +10,9 @@ const CFG = {
   HP_CLIMB_K: 380,        // 登りで増える消費の強さ
   FALL_DAMAGE: 0.2,       // 転落1回のダメージ(発生時に一括・約20%)
   HEAL: 0.35,             // ドリンク1本の回復量
-  HP_MAX: 2,              // 酸素の上限(最大値以上を取れる＝2周目は外側のリング)
   HEALTH_LAG: 2.6,        // ダメージ/回復の追従(格ゲー風)速度
   RADAR_MIN: 480,         // 低地でのレーダー到達距離(高所ほど伸びる)
-  VIEW_RADIUS_WORLD: 235, // 既定(低地・最ズームイン)の視界半径
-  HIGH_VIEW_R: 1000,      // 高所での視界半径(登るほど引いて見晴らしUP・最大でマップの約半分)
+  VIEW_RADIUS_WORLD: 235, // 既定(最ズームイン)の視界半径
   ALWAYS_R: 80,           // 常に見える近距離バブル(これより外は視線遮蔽)
   ZOOM_MAX_R: 1500,       // ピンチアウトで見渡せる最大の視界半径
   GRID_N: 84,             // 等高線サンプルの格子解像度(ズームに依らず一定負荷)
@@ -228,7 +226,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v51'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v50'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -491,10 +489,8 @@ export function start(canvas) {
   function screenToWorld(sx, sy) {
     const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
     const R = Math.min(window.innerWidth, window.innerHeight) * 0.46;
-    const playerH = game.terrain.height(game.px, game.py);
-    const hN = clamp(playerH / Math.max(0.25, game.field.max.h * 0.85), 0, 1);
-    const NORMAL = lerp(CFG.VIEW_RADIUS_WORLD, CFG.HIGH_VIEW_R, hN);
-    const blend = clamp((game.viewR - CFG.VIEW_RADIUS_WORLD) / (CFG.ZOOM_MAX_R - CFG.VIEW_RADIUS_WORLD), 0, 1);
+    const NORMAL = CFG.VIEW_RADIUS_WORLD;
+    const blend = clamp((game.viewR - NORMAL) / (CFG.ZOOM_MAX_R - NORMAL), 0, 1);
     const camx = lerp(game.px, 0, blend), camy = lerp(game.py, 0, blend);
     const frameR = lerp(NORMAL, CFG.FIELD_R * 1.07, blend);
     const ppu = R / frameR;
@@ -686,13 +682,13 @@ export function start(canvas) {
             it.taken = true;
             g.marks.push({ x: it.x, y: it.y, h: g.terrain.height(it.x, it.y), type: it.type });
             if (it.type === 'radar') { g.radar += 1; g.radarFlies.push({ t: 0 }); } // 左下へ飛ぶ演出
-            else if (it.type === 'drink') g.health = Math.min(CFG.HP_MAX, g.health + CFG.HEAL); // 回復(上限以上も貯まる)
+            else if (it.type === 'drink') g.health = Math.min(1, g.health + CFG.HEAL); // 回復
           }
         }
       }
       // 体力の消費/回復と追従表示（格ゲー風）
       g.drainRate = drain;
-      g.health = clamp(g.health - drain * dt, 0, CFG.HP_MAX);
+      g.health = clamp(g.health - drain * dt, 0, 1);
       g.healthLag += (g.health - g.healthLag) * Math.min(1, dt * CFG.HEALTH_LAG);
       if (g.health <= 0) { beginEnd(); return; }
       // NPC：広い範囲で高い所へ登る／プレイヤーが見えて近いと追跡し突き落とす
@@ -1017,14 +1013,13 @@ export function start(canvas) {
     const ALWAYS = CFG.ALWAYS_R;               // 常に見える近距離バブル
     const N = CFG.GRID_N;
     // 通常はプレイヤー中心、引きに応じてマップ中心へ。引き切るとマップ全域が枠に収まる
-    const playerH = g.terrain.height(g.px, g.py);
-    const hN = clamp(playerH / Math.max(0.25, g.field.max.h * 0.85), 0, 1);
-    // 高所ほど通常視界も少しずつ引いて見晴らしが良くなる（最大でマップの約半分）
-    const NORMAL = lerp(CFG.VIEW_RADIUS_WORLD, CFG.HIGH_VIEW_R, hN);
-    const blend = clamp((g.viewR - CFG.VIEW_RADIUS_WORLD) / (CFG.ZOOM_MAX_R - CFG.VIEW_RADIUS_WORLD), 0, 1);
+    const NORMAL = CFG.VIEW_RADIUS_WORLD;
+    const blend = clamp((g.viewR - NORMAL) / (CFG.ZOOM_MAX_R - NORMAL), 0, 1);
     const camx = lerp(g.px, 0, blend), camy = lerp(g.py, 0, blend);
     const frameR = lerp(NORMAL, CFG.FIELD_R * 1.07, blend); // 画面に収める半径
+    const playerH = g.terrain.height(g.px, g.py);
     // レーダーは高所ほど遠くまで届く（低い所では狭い）
+    const hN = clamp(playerH / Math.max(0.25, g.field.max.h * 0.85), 0, 1);
     const farSight = lerp(CFG.RADAR_MIN, 2 * CFG.FIELD_R, hN);
     const sightR = lerp(NORMAL, farSight, blend);
     const ppu = R / frameR;
@@ -1084,13 +1079,32 @@ export function start(canvas) {
           const h = grid[k00] * w00 + grid[k10] * w10 + grid[k01] * w01 + grid[k11] * w11;
           const rv = gridRV[k00] * w00 + gridRV[k10] * w10 + gridRV[k01] * w01 + gridRV[k11] * w11;
           const idx = (v * M + u) * 4;
-          // 高度カラー4色＋尾根谷度の陰影（レーダー時はこの塗りは使わず等高線のみ）
-          const c = h < ALT_TH[0] ? ALT4[0] : h < ALT_TH[1] ? ALT4[1] : h < ALT_TH[2] ? ALT4[2] : ALT4[3];
-          const shade = SHADE_LO + (SHADE_HI - SHADE_LO) * clamp(0.5 + rv * scale, 0, 1);
-          d[idx] = Math.min(255, c[0] * shade);
-          d[idx + 1] = Math.min(255, c[1] * shade);
-          d[idx + 2] = Math.min(255, c[2] * shade);
-          d[idx + 3] = 255;
+          if (radarView) {
+            // ダークなレーダー配色：自分より高い所は明るいティール、低い所は目立たない
+            const rvN = clamp(0.5 + rv * scale, 0, 1);
+            let rr, gg, bb;
+            if (h >= playerH) {
+              const up = clamp((h - playerH) * 7, 0, 1);
+              const b = 0.5 + 0.5 * up + 0.25 * (rvN - 0.5);
+              rr = 24 + 70 * b; gg = 70 + 150 * b; bb = 80 + 120 * b;
+            } else {
+              const lo = 14 + 16 * rvN; // 低地は低コントラストの暗色
+              rr = lo * 0.8; gg = lo; bb = lo * 1.1;
+            }
+            // 波紋が通過した所を一瞬照らす
+            const wx = ox0 + gxf * CELL, wy = oy0 + gyf * CELL;
+            const sd = Math.hypot(wx - g.px, wy - g.py) * ppu;
+            const glow = Math.exp(-((sd - pingR) / 26) * ((sd - pingR) / 26));
+            rr += glow * 90; gg += glow * 120; bb += glow * 130;
+            d[idx] = Math.min(255, rr); d[idx + 1] = Math.min(255, gg); d[idx + 2] = Math.min(255, bb); d[idx + 3] = 255;
+          } else {
+            const c = h < ALT_TH[0] ? ALT4[0] : h < ALT_TH[1] ? ALT4[1] : h < ALT_TH[2] ? ALT4[2] : ALT4[3];
+            const shade = SHADE_LO + (SHADE_HI - SHADE_LO) * clamp(0.5 + rv * scale, 0, 1);
+            d[idx] = Math.min(255, c[0] * shade);
+            d[idx + 1] = Math.min(255, c[1] * shade);
+            d[idx + 2] = Math.min(255, c[2] * shade);
+            d[idx + 3] = 255;
+          }
         }
       }
       shadeCtx.putImageData(img, 0, 0);
@@ -1110,23 +1124,6 @@ export function start(canvas) {
         });
         ctx.stroke();
       }
-    };
-
-    // レーダー表示：自分と同じ高さの等高線だけを光らせる（同高度の地形を浮かび上がらせる）
-    const drawPlayerIso = () => {
-      ctx.save();
-      ctx.strokeStyle = 'rgba(130,235,215,0.95)';
-      ctx.shadowColor = 'rgba(110,225,205,0.9)';
-      ctx.shadowBlur = 7;
-      ctx.lineWidth = 2;
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      contourLevel(grid, nx, ny, playerH, (a, b, c, d) => {
-        ctx.moveTo(sxOf(a), syOf(b));
-        ctx.lineTo(sxOf(c), syOf(d));
-      });
-      ctx.stroke();
-      ctx.restore();
     };
 
     // 視線遮蔽：拡大時のみ、各方角で「自分の高さ+5等高線」を超える地点まで
@@ -1163,12 +1160,8 @@ export function start(canvas) {
       for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
       ctx.closePath();
       ctx.clip();
-      if (radarView) {
-        drawPlayerIso(); // レーダーは自分と同じ高さの等高線だけ
-      } else {
-        drawTint();
-        drawContours();
-      }
+      drawTint();
+      if (!radarView) drawContours();
       ctx.restore();
 
       // 遮蔽された側を伏せる（多角形を穴にした even-odd 塗り）
@@ -1362,40 +1355,33 @@ export function start(canvas) {
     ctx.arc(cx, cy, R, 0, TAU);
     ctx.stroke();
 
-    // 体力(酸素)リング（残量＝弧の長さ。色＝消費ペース。格ゲー風のダメージ赤/回復青）
-    // 上限(1.0)を超えた分は、ひとつ外側のリング(2周目)として表示する
+    // 体力リング（残量＝弧の長さ。色＝消費ペース。格ゲー風のダメージ赤/回復青）
     if (g.state === 'play') {
-      const rr = R + 7, dr = 5, A0 = -Math.PI / 2;
-      const hp = clamp(g.health, 0, CFG.HP_MAX), lag = clamp(g.healthLag, 0, CFG.HP_MAX);
+      const rr = R + 7, A0 = -Math.PI / 2;
+      const hp = clamp(g.health, 0, 1), lag = clamp(g.healthLag, 0, 1);
       ctx.lineWidth = 3.5;
       ctx.lineCap = 'butt';
+      // 背景の薄い輪
+      ctx.strokeStyle = 'rgba(40,39,35,0.12)';
+      ctx.beginPath(); ctx.arc(cx, cy, rr, 0, TAU); ctx.stroke();
+      // ダメージ(赤)/回復(青)の追従部分
+      if (lag > hp + 1e-3) {
+        ctx.strokeStyle = COL.dmg;
+        ctx.beginPath(); ctx.arc(cx, cy, rr, A0 + hp * TAU, A0 + lag * TAU); ctx.stroke();
+      } else if (lag < hp - 1e-3) {
+        ctx.strokeStyle = COL.heal;
+        ctx.beginPath(); ctx.arc(cx, cy, rr, A0 + lag * TAU, A0 + hp * TAU); ctx.stroke();
+      }
       // 本体（消費ペースで色：低=穏やか / 高=暖色）
       const pace = clamp(g.drainRate / 0.12, 0, 1);
       const pc = [Math.round(lerp(70, 224, pace)), Math.round(lerp(150, 110, pace)), Math.round(lerp(120, 60, pace))];
-      const laps = Math.max(1, Math.ceil(Math.max(hp, lag) - 1e-6)); // 表示するリング数
-      for (let L = 0; L < laps; L++) {
-        const rL = rr + L * dr;
-        const hpL = clamp(hp - L, 0, 1), lagL = clamp(lag - L, 0, 1);
-        // 背景の薄い輪
-        ctx.strokeStyle = 'rgba(40,39,35,0.12)';
-        ctx.beginPath(); ctx.arc(cx, cy, rL, 0, TAU); ctx.stroke();
-        // ダメージ(赤)/回復(青)の追従部分
-        if (lagL > hpL + 1e-3) {
-          ctx.strokeStyle = COL.dmg;
-          ctx.beginPath(); ctx.arc(cx, cy, rL, A0 + hpL * TAU, A0 + lagL * TAU); ctx.stroke();
-        } else if (lagL < hpL - 1e-3) {
-          ctx.strokeStyle = COL.heal;
-          ctx.beginPath(); ctx.arc(cx, cy, rL, A0 + lagL * TAU, A0 + hpL * TAU); ctx.stroke();
-        }
-        // 本体
-        ctx.strokeStyle = `rgb(${pc[0]},${pc[1]},${pc[2]})`;
-        ctx.beginPath(); ctx.arc(cx, cy, rL, A0, A0 + Math.min(hpL, lagL) * TAU); ctx.stroke();
-      }
-      // O₂ 表記（2 は下付き）。最も外側のリング上端
+      ctx.strokeStyle = `rgb(${pc[0]},${pc[1]},${pc[2]})`;
+      ctx.beginPath(); ctx.arc(cx, cy, rr, A0, A0 + Math.min(hp, lag) * TAU); ctx.stroke();
+      // O₂ 表記（2 は下付き）。リング上端
       ctx.fillStyle = `rgb(${pc[0]},${pc[1]},${pc[2]})`;
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'left';
-      const oy2 = cy - (rr + (laps - 1) * dr) - 11;
+      const oy2 = cy - rr - 11;
       ctx.font = '700 13px ui-monospace, "SF Mono", Menlo, monospace';
       const wO = ctx.measureText('O').width;
       ctx.font = '700 9px ui-monospace, "SF Mono", Menlo, monospace';
