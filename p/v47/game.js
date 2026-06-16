@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -11,7 +11,6 @@ const CFG = {
   FALL_DAMAGE: 0.2,       // 転落1回のダメージ(発生時に一括・約20%)
   HEAL: 0.35,             // ドリンク1本の回復量
   HEALTH_LAG: 2.6,        // ダメージ/回復の追従(格ゲー風)速度
-  RADAR_MIN: 480,         // 低地でのレーダー到達距離(高所ほど伸びる)
   VIEW_RADIUS_WORLD: 235, // 既定(最ズームイン)の視界半径
   ALWAYS_R: 80,           // 常に見える近距離バブル(これより外は視線遮蔽)
   ZOOM_MAX_R: 1500,       // ピンチアウトで見渡せる最大の視界半径
@@ -225,7 +224,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v48'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v47'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -273,23 +272,19 @@ function drawItemGlyph(ctx, x, y, type, s, color) {
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
   if (type === 'radar') {
-    // バッテリー（電池）
-    const w = s * 0.6, h = s * 0.92;
-    ctx.strokeRect(x - w, y - h, w * 2, h * 2);
-    ctx.fillRect(x - w * 0.45, y - h - s * 0.18, w * 0.9, s * 0.18); // 端子
-    ctx.fillRect(x - w * 0.6, y - h * 0.15, w * 1.2, h * 0.55);      // 充電バー
+    // 同心円＋掃引線
+    ctx.beginPath(); ctx.arc(x, y, s * 0.85, 0, TAU); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, s * 0.45, 0, TAU); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + s * 0.85, y - s * 0.5); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, s * 0.16, 0, TAU); ctx.fill();
   } else if (type === 'drink') {
-    // 酸素ボンベ（丸頭のシリンダー＋バルブ）
-    const w = s * 0.5, h = s * 0.98;
+    // ドリンク缶
+    const w = s * 0.62, h = s * 1.05;
     ctx.beginPath();
-    ctx.moveTo(x - w, y + h);
-    ctx.lineTo(x - w, y - h + w);
-    ctx.quadraticCurveTo(x - w, y - h, x, y - h);
-    ctx.quadraticCurveTo(x + w, y - h, x + w, y - h + w);
-    ctx.lineTo(x + w, y + h);
-    ctx.closePath();
+    if (ctx.roundRect) ctx.roundRect(x - w, y - h, w * 2, h * 2, s * 0.22);
+    else ctx.rect(x - w, y - h, w * 2, h * 2);
     ctx.stroke();
-    ctx.fillRect(x - s * 0.12, y - h - s * 0.24, s * 0.24, s * 0.28); // バルブ
+    ctx.beginPath(); ctx.moveTo(x - w * 0.6, y - h * 0.4); ctx.lineTo(x + w * 0.6, y - h * 0.4); ctx.stroke();
   } else if (type === 'glove') {
     // 二段のシェブロン（登る／上へ）
     for (let k = 0; k < 2; k++) {
@@ -974,15 +969,12 @@ export function start(canvas) {
     const blend = clamp((g.viewR - NORMAL) / (CFG.ZOOM_MAX_R - NORMAL), 0, 1);
     const camx = lerp(g.px, 0, blend), camy = lerp(g.py, 0, blend);
     const frameR = lerp(NORMAL, CFG.FIELD_R * 1.07, blend); // 画面に収める半径
-    const playerH = g.terrain.height(g.px, g.py);
-    // レーダーは高所ほど遠くまで届く（低い所では狭い）
-    const hN = clamp(playerH / Math.max(0.25, g.field.max.h * 0.85), 0, 1);
-    const farSight = lerp(CFG.RADAR_MIN, 2 * CFG.FIELD_R, hN);
-    const sightR = lerp(NORMAL, farSight, blend);
+    const sightR = lerp(NORMAL, 2 * CFG.FIELD_R, blend);    // 見通せる距離（遮蔽だけが限界）
     const ppu = R / frameR;
     const CELL = (2 * frameR) / (N - 1);
     // レーダー（ズームアウト）表示：ダークなレーダー画面＋波紋
     const radarView = blend > 0.5;
+    const playerH = g.terrain.height(g.px, g.py);
     const psxR = cx + (g.px - camx) * ppu, psyR = cy + (g.py - camy) * ppu; // レーダー原点(自分)
     const pingT = (g.time % 2.2) / 2.2;       // 波紋の位相
     const pingR = pingT * (R * 1.25);          // 波紋の半径(画面px)
@@ -1334,11 +1326,6 @@ export function start(canvas) {
       const pc = [Math.round(lerp(70, 224, pace)), Math.round(lerp(150, 110, pace)), Math.round(lerp(120, 60, pace))];
       ctx.strokeStyle = `rgb(${pc[0]},${pc[1]},${pc[2]})`;
       ctx.beginPath(); ctx.arc(cx, cy, rr, A0, A0 + Math.min(hp, lag) * TAU); ctx.stroke();
-      // O2 表記（リング上端）
-      ctx.fillStyle = `rgb(${pc[0]},${pc[1]},${pc[2]})`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.font = '700 12px ui-monospace, "SF Mono", Menlo, monospace';
-      ctx.fillText('O2', cx, cy - rr - 11);
     }
 
     // プレイヤー（通常は中央。引き時はマップ上の実位置に）。転落中はアクセント色＆回転
