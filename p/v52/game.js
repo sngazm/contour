@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -19,7 +19,7 @@ const CFG = {
   HEALTH_LAG: 2.6,        // ダメージ/回復の追従(格ゲー風)速度
   RADAR_MIN: 480,         // 低地でのレーダー到達距離(高所ほど伸びる)
   VIEW_RADIUS_WORLD: 235, // 既定(低地・最ズームイン)の視界半径
-  HIGH_VIEW_FROM: 0.6,    // この高さ(全体比)を超えると円形レンズが広がり始める
+  HIGH_VIEW_R: 700,       // 高所での視界半径(登るほど引いて見晴らしUP・控えめ)
   ALWAYS_R: 80,           // 常に見える近距離バブル(これより外は視線遮蔽)
   ZOOM_MAX_R: 1500,       // ピンチアウトで見渡せる最大の視界半径
   GRID_N: 84,             // 等高線サンプルの格子解像度(ズームに依らず一定負荷)
@@ -233,7 +233,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v53'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v52'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -395,8 +395,7 @@ export function start(canvas) {
 
   // 右下の旗ボタン。押すとその場に旗を立てて即終了。最高点付近では強調(.hot)。
   const viewBtn = document.getElementById('viewbtn');
-  // リザルトで立てる旗と同じ形（ポール＋右向きの三角ペナント）
-  const ICON_FLAG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 21V3"/><path d="M7 4 L18 8.5 L7 13 Z" fill="currentColor" stroke="none"/></svg>';
+  const ICON_FLAG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 21V4"/><path d="M6 4.5h11l-2.6 3.3L17 11H6"/></svg>';
   if (viewBtn) {
     viewBtn.innerHTML = ICON_FLAG;
     viewBtn.addEventListener('click', () => {
@@ -495,16 +494,14 @@ export function start(canvas) {
 
   // 画面座標→ワールド座標（プレイ中ビュー）
   function screenToWorld(sx, sy) {
-    const W = window.innerWidth, H = window.innerHeight;
-    const cx = W / 2, cy = H / 2;
-    const R0 = Math.min(W, H) * 0.46;
+    const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+    const R = Math.min(window.innerWidth, window.innerHeight) * 0.46;
     const playerH = game.terrain.height(game.px, game.py);
-    const hi = clamp((playerH / Math.max(0.25, game.field.max.h) - CFG.HIGH_VIEW_FROM) / (1 - CFG.HIGH_VIEW_FROM), 0, 1);
-    const R = lerp(R0, Math.hypot(W, H) * 0.5, hi);
-    const ppu0 = R0 / CFG.VIEW_RADIUS_WORLD;
+    const hN = clamp(playerH / Math.max(0.25, game.field.max.h * 0.85), 0, 1);
+    const NORMAL = lerp(CFG.VIEW_RADIUS_WORLD, CFG.HIGH_VIEW_R, hN);
     const blend = clamp((game.viewR - CFG.VIEW_RADIUS_WORLD) / (CFG.ZOOM_MAX_R - CFG.VIEW_RADIUS_WORLD), 0, 1);
     const camx = lerp(game.px, 0, blend), camy = lerp(game.py, 0, blend);
-    const frameR = lerp(R / ppu0, CFG.FIELD_R * 1.07, blend);
+    const frameR = lerp(NORMAL, CFG.FIELD_R * 1.07, blend);
     const ppu = R / frameR;
     return { x: camx + (sx - cx) / ppu, y: camy + (sy - cy) / ppu };
   }
@@ -647,7 +644,7 @@ export function start(canvas) {
           g.health = clamp(g.health - dmg, 0, CFG.HP_MAX);
           g.fall = null;
           g.stun = CFG.STUN_RED;
-          if (g.health <= 0) { g.flagged = true; beginEnd(); return; } // 力尽きた地点に旗
+          if (g.health <= 0) { beginEnd(); return; }
         }
         moved = true;
       } else if (g.stun > 0) {
@@ -711,7 +708,7 @@ export function start(canvas) {
       g.drainRate = drain;
       g.health = clamp(g.health - drain * dt, 0, CFG.HP_MAX);
       g.healthLag += (g.health - g.healthLag) * Math.min(1, dt * CFG.HEALTH_LAG);
-      if (g.health <= 0) { g.flagged = true; beginEnd(); return; } // 酸素が尽きた地点に旗
+      if (g.health <= 0) { beginEnd(); return; }
       // NPC：広い範囲で高い所へ登る／プレイヤーが見えて近いと追跡し突き落とす
       let anyPush = false;
       const playerH = g.terrain.height(g.px, g.py);
@@ -1030,23 +1027,20 @@ export function start(canvas) {
   function renderPlay() {
     const g = game;
     const cx = W / 2, cy = H / 2;
-    const R0 = Math.min(W, H) * 0.46;          // 基本のレンズ半径
+    const R = Math.min(W, H) * 0.46;
     const ALWAYS = CFG.ALWAYS_R;               // 常に見える近距離バブル
     const N = CFG.GRID_N;
+    // 通常はプレイヤー中心、引きに応じてマップ中心へ。引き切るとマップ全域が枠に収まる
     const playerH = g.terrain.height(g.px, g.py);
     const hN = clamp(playerH / Math.max(0.25, g.field.max.h * 0.85), 0, 1);
-    // 高所(全体の60%以上)では、ズームは変えず「円形の外枠(レンズ)自体」を広げて見晴らしUP
-    const hi = clamp((playerH / Math.max(0.25, g.field.max.h) - CFG.HIGH_VIEW_FROM) / (1 - CFG.HIGH_VIEW_FROM), 0, 1);
-    const R = lerp(R0, Math.hypot(W, H) * 0.5, hi); // 高所でレンズが画面いっぱいまで拡大
-    const NORMAL = CFG.VIEW_RADIUS_WORLD;      // 倍率(縮尺)は一定
-    const ppu0 = R0 / NORMAL;                   // 通常の固定倍率（レンズが広がっても地形の大きさは不変）
+    // 高所ほど通常視界も少しずつ引いて見晴らしが良くなる（最大でマップの約半分）
+    const NORMAL = lerp(CFG.VIEW_RADIUS_WORLD, CFG.HIGH_VIEW_R, hN);
     const blend = clamp((g.viewR - CFG.VIEW_RADIUS_WORLD) / (CFG.ZOOM_MAX_R - CFG.VIEW_RADIUS_WORLD), 0, 1);
     const camx = lerp(g.px, 0, blend), camy = lerp(g.py, 0, blend);
-    const frameRNormal = R / ppu0;             // 通常：レンズ半径に応じて世界を多く見せる（倍率一定）
-    const frameR = lerp(frameRNormal, CFG.FIELD_R * 1.07, blend); // レーダーは全域
+    const frameR = lerp(NORMAL, CFG.FIELD_R * 1.07, blend); // 画面に収める半径
     // レーダーは高所ほど遠くまで届く（低い所では狭い）
     const farSight = lerp(CFG.RADAR_MIN, 2 * CFG.FIELD_R, hN);
-    const sightR = lerp(frameRNormal, farSight, blend);
+    const sightR = lerp(NORMAL, farSight, blend);
     const ppu = R / frameR;
     const CELL = (2 * frameR) / (N - 1);
     // レーダー（ズームアウト）表示：ダークなレーダー画面＋波紋
@@ -1389,7 +1383,7 @@ export function start(canvas) {
     // 体力(酸素)リング（残量＝弧の長さ。色＝消費ペース。格ゲー風のダメージ赤/回復青）
     // 上限(1.0)を超えた分は、ひとつ外側のリング(2周目)として表示する
     if (g.state === 'play') {
-      const rr = R0 + 7, dr = 5, A0 = -Math.PI / 2; // リングは基本半径に固定（レンズ拡大時も画面内に保つ）
+      const rr = R + 7, dr = 5, A0 = -Math.PI / 2;
       const hp = clamp(g.health, 0, CFG.HP_MAX), lag = clamp(g.healthLag, 0, CFG.HP_MAX);
       ctx.lineWidth = 3.5;
       ctx.lineCap = 'butt';
@@ -1440,7 +1434,7 @@ export function start(canvas) {
     // 震え：崖っぷちの危うさ／復帰時のブルっと（復帰は黒のまま強めに揺らす）
     const trm = recovering ? 1 : (g.tremble || 0);
     if (trm > 0 && !g.fall && !stunned) {
-      const amp = recovering ? 3.2 : trm * trm * 4.5;
+      const amp = recovering ? 5.5 : trm * trm * 4.5;
       psx += (Math.random() - 0.5) * 2 * amp;
       psy += (Math.random() - 0.5) * 2 * amp;
     }
