@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -64,10 +64,9 @@ const CFG = {
 };
 
 const RV_BLUR = 12; // 尾根谷度の近傍半径(セル数。広いほどマダラが減る)
-// 高度カラー(5色): 下から 黄土(砂地)→黄緑→緑→ブルーグレー(高山の岩場)→白。しきいは高さ0..1。
-const ALT_C = [[198, 172, 116], [156, 176, 92], [86, 138, 74], [124, 142, 156], [238, 238, 232]];
-const ALT_TH = [0.10, 0.18, 0.30, 0.46];
-const altColor = (h) => h < ALT_TH[0] ? ALT_C[0] : h < ALT_TH[1] ? ALT_C[1] : h < ALT_TH[2] ? ALT_C[2] : h < ALT_TH[3] ? ALT_C[3] : ALT_C[4];
+// 高度カラー(4色): 下から 青→緑→黄土→白。しきいは高さ0..1。
+const ALT4 = [[58, 108, 162], [104, 156, 86], [184, 150, 78], [240, 238, 230]];
+const ALT_TH = [0.15, 0.24, 0.35];
 
 // ---- リザルト地形用 WebGL2 シェーダー（ピクセル単位で色帯＋等高線＋AA）----
 const VERT_SRC = `#version 300 es
@@ -89,8 +88,7 @@ const FRAG_SRC = `#version 300 es
 precision highp float;
 in float vH; in float vRV;
 out vec4 frag;
-uniform vec3 uC0, uC1, uC2, uC3, uC4;
-uniform vec4 uTH;
+uniform vec3 uC0, uC1, uC2, uC3, uTH;
 uniform float uShadeLo, uShadeHi, uRvScale, uStep;
 void main(){
   float h = vH;
@@ -99,7 +97,6 @@ void main(){
   c = mix(c, uC1, smoothstep(uTH.x - w, uTH.x + w, h));
   c = mix(c, uC2, smoothstep(uTH.y - w, uTH.y + w, h));
   c = mix(c, uC3, smoothstep(uTH.z - w, uTH.z + w, h));
-  c = mix(c, uC4, smoothstep(uTH.w - w, uTH.w + w, h));
   float shade = uShadeLo + (uShadeHi - uShadeLo) * clamp(0.5 + vRV*uRvScale, 0.0, 1.0);
   c *= shade;
   float lp = fract(h / uStep);
@@ -175,7 +172,7 @@ function setupGL(gl) {
       prog: pTerr,
       aPos: gl.getAttribLocation(pTerr, 'aPos'), aH: gl.getAttribLocation(pTerr, 'aH'), aRV: gl.getAttribLocation(pTerr, 'aRV'),
       u: Object.assign(xform(tf), {
-        c0: tf('uC0'), c1: tf('uC1'), c2: tf('uC2'), c3: tf('uC3'), c4: tf('uC4'), th: tf('uTH'),
+        c0: tf('uC0'), c1: tf('uC1'), c2: tf('uC2'), c3: tf('uC3'), th: tf('uTH'),
         shadeLo: tf('uShadeLo'), shadeHi: tf('uShadeHi'), rvScale: tf('uRvScale'), step: tf('uStep'),
       }),
     },
@@ -236,7 +233,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v54'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v53'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -371,11 +368,10 @@ export function start(canvas) {
   resize();
 
   const input = createInput(canvas);
-  const GRID_CAP = 224;                    // 格子バッファの最大辺（高所でレンズ拡大時も世界固定セルを保つため余裕を持たせる）
-  const grid = new Float32Array(GRID_CAP * GRID_CAP); // ワールド固定格子の作業領域
-  const gridB = new Float32Array(GRID_CAP * GRID_CAP); // ぼかし
-  const gridT = new Float32Array(GRID_CAP * GRID_CAP); // ぼかし作業用
-  const gridRV = new Float32Array(GRID_CAP * GRID_CAP); // 尾根谷度
+  const grid = new Float32Array(96 * 96); // ワールド固定格子の作業領域
+  const gridB = new Float32Array(96 * 96); // ぼかし
+  const gridT = new Float32Array(96 * 96); // ぼかし作業用
+  const gridRV = new Float32Array(96 * 96); // 尾根谷度
   const grad = { x: 0, y: 0 };
   const shadeCanvas = document.createElement('canvas'); // 段彩/立体図用オフスクリーン
   const shadeCtx = shadeCanvas.getContext('2d');
@@ -965,12 +961,14 @@ export function start(canvas) {
     const at = (a) => y0 + (y1 - y0) * clamp(a / top, 0, 1);
     const st = (a) => clamp(a / top, 0, 1); // 色スケールも maxH 基準
     const grad = ctx.createLinearGradient(0, y0, 0, y1);
-    grad.addColorStop(0, rgba(ALT_C[0]));
-    for (let i = 0; i < ALT_TH.length; i++) {
-      grad.addColorStop(st(ALT_TH[i]), rgba(ALT_C[i]));     // 段彩のくっきりした境界
-      grad.addColorStop(st(ALT_TH[i]), rgba(ALT_C[i + 1]));
-    }
-    grad.addColorStop(1, rgba(ALT_C[ALT_C.length - 1]));
+    grad.addColorStop(0, rgba(ALT4[0]));
+    grad.addColorStop(st(ALT_TH[0]), rgba(ALT4[0]));
+    grad.addColorStop(st(ALT_TH[0]), rgba(ALT4[1]));
+    grad.addColorStop(st(ALT_TH[1]), rgba(ALT4[1]));
+    grad.addColorStop(st(ALT_TH[1]), rgba(ALT4[2]));
+    grad.addColorStop(st(ALT_TH[2]), rgba(ALT4[2]));
+    grad.addColorStop(st(ALT_TH[2]), rgba(ALT4[3]));
+    grad.addColorStop(1, rgba(ALT4[3]));
     ctx.fillStyle = grad;
     ctx.fillRect(x, y1, w, y0 - y1);
     ctx.strokeStyle = 'rgba(40,39,35,0.35)';
@@ -1050,12 +1048,9 @@ export function start(canvas) {
     const farSight = lerp(CFG.RADAR_MIN, 2 * CFG.FIELD_R, hN);
     const sightR = lerp(frameRNormal, farSight, blend);
     const ppu = R / frameR;
+    const CELL = (2 * frameR) / (N - 1);
     // レーダー（ズームアウト）表示：ダークなレーダー画面＋波紋
     const radarView = blend > 0.5;
-    // 等高線グリッドのセル幅。通常時(レンズ拡大含む)は世界固定の基準セルにして
-    // うねうね動くのを防ぐ（拡大はセル数で吸収）。ズーム中だけは frameR に追従させ負荷を抑える。
-    const baseCELL = (2 * CFG.VIEW_RADIUS_WORLD) / (N - 1);
-    const CELL = blend > 0.02 ? (2 * frameR) / (N - 1) : baseCELL;
     const psxR = cx + (g.px - camx) * ppu, psyR = cy + (g.py - camy) * ppu; // レーダー原点(自分)
     const pingT = (g.time % 2.2) / 2.2;       // 波紋の位相
     const pingR = pingT * (R * 1.25);          // 波紋の半径(画面px)
@@ -1063,10 +1058,10 @@ export function start(canvas) {
     ctx.fillStyle = COL.out;
     ctx.fillRect(0, 0, W, H);
 
-    // ワールドに整列した格子をサンプリング（パン中もうねらない／セル幅一定でレンズ拡大でもうねらない）
+    // ワールドに整列した格子をサンプリング（パン中もうねらない）
     const ox0 = Math.floor((camx - frameR) / CELL) * CELL;
     const oy0 = Math.floor((camy - frameR) / CELL) * CELL;
-    const nx = Math.min(GRID_CAP, Math.ceil((2 * frameR) / CELL) + 2);
+    const nx = Math.ceil((2 * frameR) / CELL) + 2;
     const ny = nx;
     let gmin = Infinity, gmax = -Infinity;
     for (let j = 0; j < ny; j++) {
@@ -1110,7 +1105,7 @@ export function start(canvas) {
           const rv = gridRV[k00] * w00 + gridRV[k10] * w10 + gridRV[k01] * w01 + gridRV[k11] * w11;
           const idx = (v * M + u) * 4;
           // 高度カラー4色＋尾根谷度の陰影（レーダー時はこの塗りは使わず等高線のみ）
-          const c = altColor(h);
+          const c = h < ALT_TH[0] ? ALT4[0] : h < ALT_TH[1] ? ALT4[1] : h < ALT_TH[2] ? ALT4[2] : ALT4[3];
           const shade = SHADE_LO + (SHADE_HI - SHADE_LO) * clamp(0.5 + rv * scale, 0, 1);
           d[idx] = Math.min(255, c[0] * shade);
           d[idx + 1] = Math.min(255, c[1] * shade);
@@ -1619,12 +1614,11 @@ export function start(canvas) {
       gl.enableVertexAttribArray(T.aRV); gl.vertexAttribPointer(T.aRV, 1, gl.FLOAT, false, 16, 12);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, glR.ibo);
       setX(u);
-      gl.uniform3f(u.c0, ALT_C[0][0] / 255, ALT_C[0][1] / 255, ALT_C[0][2] / 255);
-      gl.uniform3f(u.c1, ALT_C[1][0] / 255, ALT_C[1][1] / 255, ALT_C[1][2] / 255);
-      gl.uniform3f(u.c2, ALT_C[2][0] / 255, ALT_C[2][1] / 255, ALT_C[2][2] / 255);
-      gl.uniform3f(u.c3, ALT_C[3][0] / 255, ALT_C[3][1] / 255, ALT_C[3][2] / 255);
-      gl.uniform3f(u.c4, ALT_C[4][0] / 255, ALT_C[4][1] / 255, ALT_C[4][2] / 255);
-      gl.uniform4f(u.th, ALT_TH[0], ALT_TH[1], ALT_TH[2], ALT_TH[3]);
+      gl.uniform3f(u.c0, ALT4[0][0] / 255, ALT4[0][1] / 255, ALT4[0][2] / 255);
+      gl.uniform3f(u.c1, ALT4[1][0] / 255, ALT4[1][1] / 255, ALT4[1][2] / 255);
+      gl.uniform3f(u.c2, ALT4[2][0] / 255, ALT4[2][1] / 255, ALT4[2][2] / 255);
+      gl.uniform3f(u.c3, ALT4[3][0] / 255, ALT4[3][1] / 255, ALT4[3][2] / 255);
+      gl.uniform3f(u.th, ALT_TH[0], ALT_TH[1], ALT_TH[2]);
       gl.uniform1f(u.shadeLo, SHADE_LO);
       gl.uniform1f(u.shadeHi, SHADE_HI);
       gl.uniform1f(u.rvScale, e.rvScale);
@@ -1723,8 +1717,8 @@ export function start(canvas) {
       for (let ci = 0; ci < cells.length; ci++) {
         const k = cells[ci][1], r = cells[ci][2], c = cells[ci][3];
         const k10 = k + 1, k11 = (r + 1) * CXr + c + 1, k01 = (r + 1) * CXr + c;
-        const hm = H4[k]; // プレイ画面と同じ段彩のくっきり塗り分け
-        const col = altColor(hm);
+        const hm = H4[k]; // プレイ画面と同じ4色のくっきり塗り分け
+        const col = hm < ALT_TH[0] ? ALT4[0] : hm < ALT_TH[1] ? ALT4[1] : hm < ALT_TH[2] ? ALT4[2] : ALT4[3];
         const shade = SHADE_LO + (SHADE_HI - SHADE_LO) * clamp(0.5 + rvg[k] * rvs, 0, 1);
         const cs = `rgb(${Math.min(255, col[0] * shade) | 0},${Math.min(255, col[1] * shade) | 0},${Math.min(255, col[2] * shade) | 0})`;
         ctx.fillStyle = cs; ctx.strokeStyle = cs; ctx.lineWidth = 1; // 同色stroke で継ぎ目を消す
