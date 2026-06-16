@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 60,           // 1ゲームの長さ(秒)
@@ -220,7 +220,6 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v45'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -1340,9 +1339,9 @@ export function start(canvas) {
     drawHud(g.terrain.height(g.px, g.py), g.field.max.h, g.best, g.flash, g.bonus);
     drawAltMeter(g.terrain.height(g.px, g.py), g.best, g.field.max.h);
 
-    // 左下：レーダー所持数（上）と #ラン番号（下）
+    // レーダー所持数を左下に小さく
     if (g.radar > 0) {
-      const bx = 26, by = H - 46;
+      const bx = 26, by = H - 28;
       drawItemGlyph(ctx, bx, by, 'radar', 9, COL.item);
       if (g.radar > 1) {
         ctx.fillStyle = COL.item;
@@ -1352,28 +1351,17 @@ export function start(canvas) {
         ctx.fillText('×' + g.radar, bx + 15, by + 8);
       }
     }
-    ctx.fillStyle = 'rgba(40,39,35,0.45)';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.font = '600 13px ui-monospace, "SF Mono", Menlo, monospace';
-    ctx.fillText('#' + g.runNumber, 16, H - 22);
 
     // タイトル（ready のときだけ）
     if (g.state === 'ready') {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       const size = Math.min(W, H) * 0.085;
-      const ty = Math.max(size, cy - R - size * 0.7);
       ctx.font = `700 ${size}px ui-monospace, "SF Mono", Menlo, monospace`;
       if ('letterSpacing' in ctx) ctx.letterSpacing = '0.28em';
       ctx.fillStyle = 'rgba(38,37,31,0.88)';
-      ctx.fillText('TOPOPO', cx + size * 0.14, ty);
+      ctx.fillText('TOPOPO', cx + size * 0.14, Math.max(size, cy - R - size * 0.7));
       if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
-      // タイトル脇にバージョン番号
-      ctx.textAlign = 'left';
-      ctx.font = `600 ${Math.round(size * 0.34)}px ui-monospace, "SF Mono", Menlo, monospace`;
-      ctx.fillStyle = 'rgba(38,37,31,0.4)';
-      ctx.fillText(VERSION, cx + size * 2.2, ty - size * 0.28);
     }
   }
 
