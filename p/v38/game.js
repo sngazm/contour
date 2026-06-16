@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 60,           // 1ゲームの長さ(秒)
@@ -93,7 +93,8 @@ void main(){
   frag = vec4(c, 1.0);
 }`;
 // 経路用：スクリーン空間で一定幅に押し出す（角度に依らず太さ一定＝パイプ）。同じ深度で隠面。
-const GLSL_PROJ = `
+const VERT_LINE = `#version 300 es
+in vec2 aPos; in float aH; in vec2 aPos2; in float aH2; in float aSide;
 uniform vec2 uCam, uYaw, uTilt, uOrigin, uView;
 uniform float uScale, uZ, uDepth, uHalfW;
 vec3 proj(vec2 pw, float h){
@@ -102,10 +103,7 @@ vec3 proj(vec2 pw, float h){
   float ry = X*uYaw.y + Y*uYaw.x;
   float Z = h * uZ;
   return vec3(uOrigin.x + rx*uScale, uOrigin.y + ry*uScale*uTilt.x - Z*uScale*uTilt.y, ry);
-}`;
-const VERT_LINE = `#version 300 es
-in vec2 aPos; in float aH; in vec2 aPos2; in float aH2; in float aSide;
-${GLSL_PROJ}
+}
 void main(){
   vec3 P = proj(aPos, aH), Q = proj(aPos2, aH2);
   vec2 d = Q.xy - P.xy; float L = length(d);
@@ -116,20 +114,6 @@ void main(){
 const FRAG_LINE = `#version 300 es
 precision highp float; out vec4 frag; uniform vec4 uColor;
 void main(){ frag = uColor; }`;
-// 各頂点の円（ラウンド接合＋丸キャップ）
-const VERT_DISC = `#version 300 es
-in vec2 aPos; in float aH; in vec2 aCorner;
-out vec2 vUV;
-${GLSL_PROJ}
-void main(){
-  vec3 P = proj(aPos, aH);
-  vec2 sp = P.xy + aCorner * uHalfW;
-  vUV = aCorner;
-  gl_Position = vec4(sp.x/uView.x*2.0 - 1.0, 1.0 - sp.y/uView.y*2.0, -P.z*uDepth, 1.0);
-}`;
-const FRAG_DISC = `#version 300 es
-precision highp float; in vec2 vUV; out vec4 frag; uniform vec4 uColor;
-void main(){ if (dot(vUV, vUV) > 1.0) discard; frag = uColor; }`;
 function setupGL(gl) {
   const mk = (type, src) => {
     const s = gl.createShader(type);
@@ -145,15 +129,14 @@ function setupGL(gl) {
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.warn(gl.getProgramInfoLog(p)); return null; }
     return p;
   };
-  const pTerr = prog(VERT_SRC, FRAG_SRC), pLine = prog(VERT_LINE, FRAG_LINE), pDisc = prog(VERT_DISC, FRAG_DISC);
-  if (!pTerr || !pLine || !pDisc) return null;
+  const pTerr = prog(VERT_SRC, FRAG_SRC), pLine = prog(VERT_LINE, FRAG_LINE);
+  if (!pTerr || !pLine) return null;
   const tf = (n) => gl.getUniformLocation(pTerr, n);
   const lf = (n) => gl.getUniformLocation(pLine, n);
-  const df = (n) => gl.getUniformLocation(pDisc, n);
   const TUN = ['cam', 'yaw', 'tilt', 'origin', 'view', 'scale', 'z', 'depth'];
   const xform = (fn) => { const o = {}; for (const n of TUN) o[n] = fn('u' + n[0].toUpperCase() + n.slice(1)); return o; };
   return {
-    vbo: gl.createBuffer(), ibo: gl.createBuffer(), pbo: gl.createBuffer(), dbo: gl.createBuffer(),
+    vbo: gl.createBuffer(), ibo: gl.createBuffer(), pbo: gl.createBuffer(),
     terr: {
       prog: pTerr,
       aPos: gl.getAttribLocation(pTerr, 'aPos'), aH: gl.getAttribLocation(pTerr, 'aH'), aRV: gl.getAttribLocation(pTerr, 'aRV'),
@@ -167,11 +150,6 @@ function setupGL(gl) {
       aPos: gl.getAttribLocation(pLine, 'aPos'), aH: gl.getAttribLocation(pLine, 'aH'),
       aPos2: gl.getAttribLocation(pLine, 'aPos2'), aH2: gl.getAttribLocation(pLine, 'aH2'), aSide: gl.getAttribLocation(pLine, 'aSide'),
       u: Object.assign(xform(lf), { color: lf('uColor'), halfW: lf('uHalfW') }),
-    },
-    disc: {
-      prog: pDisc,
-      aPos: gl.getAttribLocation(pDisc, 'aPos'), aH: gl.getAttribLocation(pDisc, 'aH'), aCorner: gl.getAttribLocation(pDisc, 'aCorner'),
-      u: Object.assign(xform(df), { color: df('uColor'), halfW: df('uHalfW') }),
     },
   };
 }
@@ -768,7 +746,7 @@ export function start(canvas) {
         h: Float32Array.from(sh), n: sh.length,
       },
       cam: { yaw: 0, yawVel: 0, zoom: 1, tiltOff: 0, touched: false },
-      glCount: 0, glPathCount: 0, glDiscCount: 0,
+      glCount: 0, glPathCount: 0,
     };
     // WebGL 用メッシュをアップロード（頂点= worldX,worldY,height,rv / 三角形インデックス）
     if (glR) {
@@ -808,18 +786,6 @@ export function start(canvas) {
       gl.bindBuffer(gl.ARRAY_BUFFER, glR.pbo);
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pv), gl.STATIC_DRAW);
       g.end.glPathCount = pv.length / 7;
-
-      // 各頂点に円（ラウンド接合＋丸キャップ）。スクリーン空間のビルボード矩形→fragで円に
-      const dv = [];
-      const disc = (p, cxv, cyv) => dv.push(p.x, p.y, p.h + bias, cxv, cyv);
-      for (let i = 0; i < pts.length; i++) {
-        const p = pts[i];
-        disc(p, -1, -1); disc(p, 1, -1); disc(p, 1, 1);
-        disc(p, -1, -1); disc(p, 1, 1); disc(p, -1, 1);
-      }
-      gl.bindBuffer(gl.ARRAY_BUFFER, glR.dbo);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(dv), gl.STATIC_DRAW);
-      g.end.glDiscCount = dv.length / 5;
     }
     g.state = 'end';
     endPointers.clear();
@@ -1395,17 +1361,6 @@ export function start(canvas) {
         gl.uniform4f(Ln.u.color, 0.88, 0.32, 0.18, 1.0); // アクセント
         gl.depthMask(false);
         gl.drawArrays(gl.TRIANGLES, 0, e.glPathCount);
-        // ラウンド接合＋丸キャップ
-        const Dz = glR.disc;
-        gl.useProgram(Dz.prog);
-        gl.bindBuffer(gl.ARRAY_BUFFER, glR.dbo);
-        gl.enableVertexAttribArray(Dz.aPos); gl.vertexAttribPointer(Dz.aPos, 2, gl.FLOAT, false, 20, 0);
-        gl.enableVertexAttribArray(Dz.aH); gl.vertexAttribPointer(Dz.aH, 1, gl.FLOAT, false, 20, 8);
-        gl.enableVertexAttribArray(Dz.aCorner); gl.vertexAttribPointer(Dz.aCorner, 2, gl.FLOAT, false, 20, 12);
-        setX(Dz.u);
-        gl.uniform1f(Dz.u.halfW, 3.5);
-        gl.uniform4f(Dz.u.color, 0.88, 0.32, 0.18, 1.0);
-        gl.drawArrays(gl.TRIANGLES, 0, e.glDiscCount);
         gl.depthMask(true);
       }
     }
