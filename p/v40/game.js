@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 60,           // 1ゲームの長さ(秒)
@@ -379,10 +379,7 @@ export function start(canvas) {
     viewBtn.innerHTML = ICON_RADAR;
     viewBtn.addEventListener('click', () => {
       const g = game;
-      if (g.state === 'play' && g.radar > 0 && !g.far) {
-        g.far = true; g.radar -= 1;
-        g.marks.push({ x: g.px, y: g.py, h: g.terrain.height(g.px, g.py), type: 'scan' });
-      }
+      if (g.state === 'play' && g.radar > 0 && !g.far) { g.far = true; g.radar -= 1; }
     });
   }
 
@@ -404,7 +401,6 @@ export function start(canvas) {
       radar: 0,             // レーダー所持数(1回ぶんのズームアウト)
       bonus: 0,             // 到達したボーナス地点の数（別軸の達成）
       boonFlash: 0,         // ボーナス取得の演出
-      marks: [],            // 取得/偵察した地点 {x,y,h,type}（リザルト表示用）
       pickups: spawnPickups(terrain, CFG.FIELD_R),
       npcs: spawnNpcs(CFG.FIELD_R),
       riding: null,         // ジップライン移動中の目標 {tx,ty}
@@ -603,7 +599,6 @@ export function start(canvas) {
         for (const it of g.pickups) {
           if (!it.taken && Math.hypot(g.px - it.x, g.py - it.y) < CFG.PICKUP_R) {
             it.taken = true;
-            g.marks.push({ x: it.x, y: it.y, h: g.terrain.height(it.x, it.y), type: it.type });
             if (it.type === 'radar') g.radar += 1;
             else if (it.type === 'boon') { g.bonus += 1; g.boonFlash = 0.8; g.timeLimit += CFG.BONUS_TIME; }
           }
@@ -1397,7 +1392,7 @@ export function start(canvas) {
         gl.enableVertexAttribArray(Ln.aH2); gl.vertexAttribPointer(Ln.aH2, 1, gl.FLOAT, false, 28, 20);
         gl.enableVertexAttribArray(Ln.aSide); gl.vertexAttribPointer(Ln.aSide, 1, gl.FLOAT, false, 28, 24);
         setX(Ln.u);
-        gl.uniform1f(Ln.u.halfW, 2.3); // スクリーン上の半幅(px)
+        gl.uniform1f(Ln.u.halfW, 3.5); // スクリーン上の半幅(px)
         gl.uniform4f(Ln.u.color, 0.88, 0.32, 0.18, 1.0); // アクセント
         gl.depthMask(false);
         gl.drawArrays(gl.TRIANGLES, 0, e.glPathCount);
@@ -1409,7 +1404,7 @@ export function start(canvas) {
         gl.enableVertexAttribArray(Dz.aH); gl.vertexAttribPointer(Dz.aH, 1, gl.FLOAT, false, 20, 8);
         gl.enableVertexAttribArray(Dz.aCorner); gl.vertexAttribPointer(Dz.aCorner, 2, gl.FLOAT, false, 20, 12);
         setX(Dz.u);
-        gl.uniform1f(Dz.u.halfW, 2.3);
+        gl.uniform1f(Dz.u.halfW, 3.5);
         gl.uniform4f(Dz.u.color, 0.88, 0.32, 0.18, 1.0);
         gl.drawArrays(gl.TRIANGLES, 0, e.glDiscCount);
         gl.depthMask(true);
@@ -1542,24 +1537,6 @@ export function start(canvas) {
       ctx.beginPath();
       ctx.arc(epr.sx, epr.sy, 7 * pulse, 0, TAU);
       ctx.fill();
-    }
-
-    // 取得地点（レーダー/ボーナス）と、レーダーを使った地点
-    for (const m of g.marks) {
-      const mr = project(m.x, m.y, m.h);
-      if (m.type === 'scan') {
-        ctx.strokeStyle = 'rgba(31,138,138,0.85)';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(mr.sx, mr.sy, 5, 0, TAU); ctx.stroke();
-        ctx.beginPath(); ctx.arc(mr.sx, mr.sy, 9, 0, TAU); ctx.stroke();
-      } else {
-        const col = m.type === 'boon' ? COL.boon : COL.item;
-        ctx.fillStyle = 'rgba(247,246,242,0.92)';
-        ctx.beginPath(); ctx.arc(mr.sx, mr.sy, 7, 0, TAU); ctx.fill();
-        ctx.strokeStyle = col; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(mr.sx, mr.sy, 7, 0, TAU); ctx.stroke();
-        drawItemGlyph(ctx, mr.sx, mr.sy, m.type, 5, col);
-      }
     }
 
     // フィールド最高地点を強調（金色のビーコン）
