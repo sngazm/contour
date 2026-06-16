@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 60,           // 1ゲームの長さ(秒)
@@ -798,8 +798,7 @@ export function start(canvas) {
       g.end.glCount = idx.length;
 
       // 経路：各区間を「自点/相手点/左右」で持つ。幅はシェーダーがスクリーン空間で付ける
-      // bias=地面から少し浮かせる量（食い込み防止）
-      const pts = g.path, bias = 0.022, pv = [];
+      const pts = g.path, bias = 0.006, pv = [];
       const vtx = (t, o, side) => pv.push(t.x, t.y, t.h + bias, o.x, o.y, o.h + bias, side);
       for (let i = 0; i + 1 < pts.length; i++) {
         const a = pts[i], b = pts[i + 1];
