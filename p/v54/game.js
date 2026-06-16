@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -236,7 +236,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v55'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v54'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -1158,8 +1158,7 @@ export function start(canvas) {
     const occlude = true; // 常時オクルージョン（遮蔽の先は見えない）
     let poly = null;
     if (occlude) {
-      // 通常は「自分の高さ+3等高線」まで見えるが、レーダーは自分のいる高さの輪郭で遮蔽する
-      const thresh = radarView ? playerH : playerH + CFG.LOS_CONTOURS * CFG.CONTOUR_STEP;
+      const thresh = g.terrain.height(g.px, g.py) + CFG.LOS_CONTOURS * CFG.CONTOUR_STEP;
       const RAYS = CFG.VIEWSHED_RAYS, STEPS = CFG.VIEWSHED_STEPS;
       poly = [];
       for (let a = 0; a < RAYS; a++) {
