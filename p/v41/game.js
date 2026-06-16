@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   DURATION: 60,           // 1ゲームの長さ(秒)
@@ -177,13 +177,6 @@ function setupGL(gl) {
 }
 const SHADE_LO = 0.68; // 谷の暗さ
 const SHADE_HI = 1.16; // 尾根の明るさ
-
-// ラン番号 → 地形シード（全クライアントで決定的＝同じNラン目は同じ地形）
-function runSeed(n) {
-  let h = Math.imul(n ^ 0x9e3779b9, 2654435761);
-  h ^= h >>> 15; h = Math.imul(h, 2246822519); h ^= h >>> 13;
-  return h >>> 0;
-}
 
 // NPCを撒く（開始地点から離して散らす）
 function spawnNpcs(R) {
@@ -394,17 +387,10 @@ export function start(canvas) {
   }
 
   function newGame() {
-    // ラン回数をブラウザに記録。Nラン目は全員同じ地形 → 足跡が噛み合う
-    let runNumber = 1;
-    try {
-      runNumber = (parseInt(localStorage.getItem('topopo_run') || '0', 10) || 0) + 1;
-      localStorage.setItem('topopo_run', String(runNumber));
-    } catch (_) { /* localStorage不可でも続行 */ }
-    const terrain = makeTerrain(runSeed(runNumber));
+    const seed = (Math.random() * 1e9) >>> 0;
+    const terrain = makeTerrain(seed);
     game = {
       terrain,
-      runNumber,
-      ghosts: [],                   // 他プレイヤーの足跡（非同期で読み込む）
       field: { r: CFG.FIELD_R, max: findFieldMax(terrain, CFG.FIELD_R) },
       state: 'ready',
       time: 0,
@@ -437,30 +423,6 @@ export function start(canvas) {
     endPointers.clear();
     endGesture = null;
     if (viewBtn) viewBtn.style.display = 'none';
-    fetchGhosts(runNumber);
-  }
-
-  // 他プレイヤーの足跡を取得（同シード=同じラン番号）。失敗は無視。
-  function fetchGhosts(runNumber) {
-    fetch('/api/runs?seed=' + runNumber)
-      .then((r) => (r.ok ? r.json() : []))
-      .then((runs) => { if (game && game.runNumber === runNumber && Array.isArray(runs)) game.ghosts = runs; })
-      .catch(() => {});
-  }
-
-  // 自分のランを送信（軌跡を間引いて）。失敗は無視。
-  function postRun() {
-    const g = game;
-    const max = 48, step = Math.max(1, Math.ceil(g.path.length / max)), path = [];
-    for (let i = 0; i < g.path.length; i += step) path.push([Math.round(g.path[i].x), Math.round(g.path[i].y), +g.path[i].h.toFixed(3)]);
-    const last = g.path[g.path.length - 1];
-    path.push([Math.round(last.x), Math.round(last.y), +last.h.toFixed(3)]);
-    try {
-      fetch('/api/runs', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ seed: g.runNumber, path, best: altOf(g.best), bonus: g.bonus, flagged: g.flagged }),
-      }).catch(() => {});
-    } catch (_) {}
   }
   newGame();
 
@@ -753,7 +715,6 @@ export function start(canvas) {
     if (Math.hypot(g.px - last.x, g.py - last.y) > 0.5) {
       g.path.push({ x: g.px, y: g.py, h: g.terrain.height(g.px, g.py) });
     }
-    postRun(); // 自分のランを記録（他プレイヤーの足跡になる）
     // 軌跡の範囲＋余白で俯瞰領域を決める
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const p of g.path) {
@@ -1530,22 +1491,6 @@ export function start(canvas) {
         ctx.stroke(paths[band]);
       }
       ctx.globalCompositeOperation = 'source-over';
-    }
-
-    // 他プレイヤーの足跡（ゴースト）。薄く重ねると人気ルートが濃く見える
-    if (g.ghosts && g.ghosts.length) {
-      ctx.strokeStyle = 'rgba(70,66,58,0.16)';
-      ctx.lineWidth = 1.2;
-      for (const gh of g.ghosts) {
-        const pa = gh.path;
-        if (!pa || pa.length < 2) continue;
-        ctx.beginPath();
-        for (let i = 0; i < pa.length; i++) {
-          const pr = project(pa[i][0], pa[i][1], pa[i][2]);
-          if (i === 0) ctx.moveTo(pr.sx, pr.sy); else ctx.lineTo(pr.sx, pr.sy);
-        }
-        ctx.stroke();
-      }
     }
 
     // 軌跡（GL不可時のみ2Dで。GL使用時は深度付きリボンで描画済み）
