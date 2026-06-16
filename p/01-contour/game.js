@@ -1367,13 +1367,15 @@ export function start(canvas) {
       ctx.font = `700 ${size}px ui-monospace, "SF Mono", Menlo, monospace`;
       if ('letterSpacing' in ctx) ctx.letterSpacing = '0.28em';
       ctx.fillStyle = 'rgba(38,37,31,0.88)';
-      ctx.fillText('TOPOPO', cx + size * 0.14, ty);
+      const tcx = cx + size * 0.14;
+      ctx.fillText('TOPOPO', tcx, ty);
+      const tw = ctx.measureText('TOPOPO').width; // 文字間隔込みの実幅
       if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
-      // タイトル脇にバージョン番号
+      // タイトル脇にバージョン番号（実幅から右に余白を空ける）
       ctx.textAlign = 'left';
       ctx.font = `600 ${Math.round(size * 0.34)}px ui-monospace, "SF Mono", Menlo, monospace`;
       ctx.fillStyle = 'rgba(38,37,31,0.4)';
-      ctx.fillText(VERSION, cx + size * 2.2, ty - size * 0.28);
+      ctx.fillText(VERSION, tcx + tw / 2 + 12, ty - size * 0.24);
     }
   }
 
