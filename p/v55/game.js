@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -19,9 +19,7 @@ const CFG = {
   HEALTH_LAG: 2.6,        // ダメージ/回復の追従(格ゲー風)速度
   RADAR_MIN: 480,         // 低地でのレーダー到達距離(高所ほど伸びる)
   VIEW_RADIUS_WORLD: 235, // 既定(低地・最ズームイン)の視界半径
-  HIGH_VIEW_FROM: 0.5,    // この高さ(全体比)を超えると円形レンズが広がり始める
-  HIGH_VIEW_TO: 0.7,      // この高さで見晴らし全開（レンズ最大）
-  ITEM_DETECT_MUL: 1.5,   // 高所(FROM以上)でアイテムを探知できる範囲＝見晴らし×これ
+  HIGH_VIEW_FROM: 0.6,    // この高さ(全体比)を超えると円形レンズが広がり始める
   ALWAYS_R: 80,           // 常に見える近距離バブル(これより外は視線遮蔽)
   ZOOM_MAX_R: 1500,       // ピンチアウトで見渡せる最大の視界半径
   GRID_N: 84,             // 等高線サンプルの格子解像度(ズームに依らず一定負荷)
@@ -238,7 +236,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v56'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v55'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -324,39 +322,33 @@ function drawItemGlyph(ctx, x, y, type, s, color) {
   }
 }
 
-// フィールド内の最高地点を探す（細かいグリッドで候補を拾い、上位から勾配上昇で精密化）
-// 粗すぎると鋭い峰を取りこぼし「表示の最高地点より上に行ける」不具合になるため密にサンプルする
+// フィールド内の最高地点を探す（粗いグリッド → 勾配上昇で微調整）
 function findFieldMax(terrain, R) {
-  const N = 150;                          // ≒20単位刻み（地形の最小スケールに見合う密度）
-  const cands = [];
+  let best = { x: 0, y: 0, h: -1 };
+  const N = 72;
   for (let j = 0; j < N; j++) {
     for (let i = 0; i < N; i++) {
       const x = -R + (2 * R) * (i / (N - 1));
       const y = -R + (2 * R) * (j / (N - 1));
       if (x * x + y * y > R * R) continue;
-      cands.push({ x, y, h: terrain.height(x, y) });
+      const h = terrain.height(x, y);
+      if (h > best.h) best = { x, y, h };
     }
   }
-  cands.sort((a, b) => b.h - a.h);
-  const seeds = cands.slice(0, 12);       // 上位候補それぞれから登って局所最適の取りこぼしを防ぐ
-  let best = seeds[0];
   const g = { x: 0, y: 0 };
-  for (const s of seeds) {
-    let x = s.x, y = s.y, h = s.h;
-    let step = (2 * R) / (N - 1);
-    for (let it = 0; it < 90; it++) {
-      terrain.gradient(x, y, g);
-      const m = Math.hypot(g.x, g.y) || 1;
-      const nx = x + (g.x / m) * step;
-      const ny = y + (g.y / m) * step;
-      if (nx * nx + ny * ny <= R * R) {
-        const nh = terrain.height(nx, ny);
-        if (nh > h) { x = nx; y = ny; h = nh; continue; }
-      }
-      step *= 0.6;
-      if (step < 0.3) break;
+  let x = best.x, y = best.y;
+  let step = (2 * R) / (N - 1);
+  for (let it = 0; it < 60; it++) {
+    terrain.gradient(x, y, g);
+    const m = Math.hypot(g.x, g.y) || 1;
+    const nx = x + (g.x / m) * step;
+    const ny = y + (g.y / m) * step;
+    if (nx * nx + ny * ny <= R * R) {
+      const nh = terrain.height(nx, ny);
+      if (nh > best.h) { best = { x: nx, y: ny, h: nh }; x = nx; y = ny; continue; }
     }
-    if (h > best.h) best = { x, y, h };
+    step *= 0.6;
+    if (step < 0.4) break;
   }
   return best;
 }
@@ -511,7 +503,7 @@ export function start(canvas) {
     const cx = W / 2, cy = H / 2;
     const R0 = Math.min(W, H) * 0.46;
     const playerH = game.terrain.height(game.px, game.py);
-    const hi = clamp((playerH / Math.max(0.25, game.field.max.h) - CFG.HIGH_VIEW_FROM) / (CFG.HIGH_VIEW_TO - CFG.HIGH_VIEW_FROM), 0, 1);
+    const hi = clamp((playerH / Math.max(0.25, game.field.max.h) - CFG.HIGH_VIEW_FROM) / (1 - CFG.HIGH_VIEW_FROM), 0, 1);
     const R = lerp(R0, Math.hypot(W, H) * 0.5, hi);
     const ppu0 = R0 / CFG.VIEW_RADIUS_WORLD;
     const blend = clamp((game.viewR - CFG.VIEW_RADIUS_WORLD) / (CFG.ZOOM_MAX_R - CFG.VIEW_RADIUS_WORLD), 0, 1);
@@ -1045,8 +1037,8 @@ export function start(canvas) {
     const N = CFG.GRID_N;
     const playerH = g.terrain.height(g.px, g.py);
     const hN = clamp(playerH / Math.max(0.25, g.field.max.h * 0.85), 0, 1);
-    // 高所(全体の50%以上)では、ズームは変えず「円形の外枠(レンズ)自体」を広げて見晴らしUP（70%で全開）
-    const hi = clamp((playerH / Math.max(0.25, g.field.max.h) - CFG.HIGH_VIEW_FROM) / (CFG.HIGH_VIEW_TO - CFG.HIGH_VIEW_FROM), 0, 1);
+    // 高所(全体の60%以上)では、ズームは変えず「円形の外枠(レンズ)自体」を広げて見晴らしUP
+    const hi = clamp((playerH / Math.max(0.25, g.field.max.h) - CFG.HIGH_VIEW_FROM) / (1 - CFG.HIGH_VIEW_FROM), 0, 1);
     const R = lerp(R0, Math.hypot(W, H) * 0.5, hi); // 高所でレンズが画面いっぱいまで拡大
     const NORMAL = CFG.VIEW_RADIUS_WORLD;      // 倍率(縮尺)は一定
     const ppu0 = R0 / NORMAL;                   // 通常の固定倍率（レンズが広がっても地形の大きさは不変）
@@ -1272,56 +1264,27 @@ export function start(canvas) {
     };
     const itemPulse = ((g.time + g.readyPulse) % 1.2) / 1.2;
 
-    // アイテム（未取得・視界内に表示）。レーダー=青緑 / ドリンク=青
-    // 高所(50%以上)では「見晴らし×1.5」の範囲まで探知し、画面外のものは視界の端に方向の三角を出す
-    const heightFrac = playerH / Math.max(0.25, g.field.max.h);
-    const detectR = CFG.ITEM_DETECT_MUL * sightR;
-    const aMargin = 18;
-    const offArea = (sx, sy) => Math.hypot(sx - cx, sy - cy) > R - aMargin || sx < aMargin || sx > W - aMargin || sy < aMargin || sy > H - aMargin;
+    // アイテム（未取得・視界内のみ表示）。レーダー=青緑 / ドリンク=青
     for (const it of g.pickups) {
-      if (it.taken) continue;
+      if (it.taken || !visibleAt(it.x, it.y)) continue;
+      const sx = wsx(it.x), sy = wsy(it.y);
       const col = it.type === 'drink' ? COL.drink : COL.item;
       const rgbStr = it.type === 'drink' ? '42,127,208' : '31,138,138';
-      if (visibleAt(it.x, it.y)) {
-        const sx = wsx(it.x), sy = wsy(it.y);
-        ctx.strokeStyle = `rgba(${rgbStr},${0.5 * (1 - itemPulse)})`;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(sx, sy, 12 + itemPulse * 10, 0, TAU);
-        ctx.stroke();
-        ctx.fillStyle = 'rgba(247,246,242,0.9)';
-        ctx.beginPath();
-        ctx.arc(sx, sy, 13, 0, TAU);
-        ctx.fill();
-        ctx.strokeStyle = col;
-        ctx.lineWidth = 1.6;
-        ctx.beginPath();
-        ctx.arc(sx, sy, 13, 0, TAU);
-        ctx.stroke();
-        drawItemGlyph(ctx, sx, sy, it.type, 9, col);
-        continue;
-      }
-      // 探知された画面外アイテムの方向三角（高所のみ・通常ビュー）
-      if (radarView || heightFrac < CFG.HIGH_VIEW_FROM) continue;
-      if (Math.hypot(it.x - g.px, it.y - g.py) > detectR) continue;
-      const sx = wsx(it.x), sy = wsy(it.y);
-      if (!offArea(sx, sy)) continue;
-      let dx = sx - cx, dy = sy - cy; const dl = Math.hypot(dx, dy) || 1;
-      const ux = dx / dl, uy = dy / dl;
-      const txE = ux > 1e-3 ? (W - aMargin - cx) / ux : ux < -1e-3 ? (aMargin - cx) / ux : Infinity;
-      const tyE = uy > 1e-3 ? (H - aMargin - cy) / uy : uy < -1e-3 ? (aMargin - cy) / uy : Infinity;
-      const edge = Math.min(R - aMargin, txE, tyE);
-      const ex = cx + ux * edge, ey = cy + uy * edge;
-      ctx.save();
-      ctx.translate(ex, ey);
-      ctx.rotate(Math.atan2(uy, ux));
-      ctx.fillStyle = `rgb(${rgbStr})`;
-      ctx.strokeStyle = 'rgba(247,246,242,0.9)';
-      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = `rgba(${rgbStr},${0.5 * (1 - itemPulse)})`;
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(9, 0); ctx.lineTo(-5, 6); ctx.lineTo(-5, -6); ctx.closePath();
-      ctx.fill(); ctx.stroke();
-      ctx.restore();
+      ctx.arc(sx, sy, 12 + itemPulse * 10, 0, TAU);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(247,246,242,0.9)';
+      ctx.beginPath();
+      ctx.arc(sx, sy, 13, 0, TAU);
+      ctx.fill();
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 13, 0, TAU);
+      ctx.stroke();
+      drawItemGlyph(ctx, sx, sy, it.type, 9, col);
     }
 
     // NPC（視界内）。プレイヤーを追っている個体はアクセントで警告
