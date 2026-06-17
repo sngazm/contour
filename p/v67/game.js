@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -241,7 +241,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v68'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v67'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -2228,37 +2228,29 @@ export function start(canvas) {
 
     // 共有動画の収録中は下部に TOPOPO のロゴ（デイリーはその下に Daily Challenge バッジ）
     if (recording) {
-      const logoSize = Math.round(Math.min(W, H) * 0.078); // 1.3倍に拡大
+      const logoSize = Math.round(Math.min(W, H) * 0.06);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
+      // デイリーはバッジぶんロゴゾーンを上げて収める
+      const topY = g.daily ? H - 56 : H - 36;
+      ctx.font = `700 ${logoSize}px ui-monospace, "SF Mono", Menlo, monospace`;
+      if ('letterSpacing' in ctx) ctx.letterSpacing = '0.3em';
+      ctx.fillStyle = 'rgba(38,37,31,0.9)';
+      ctx.fillText('TOPOPO', W / 2, topY);
+      if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
       if (g.daily) {
-        const fb = Math.round(logoSize * 0.42);
-        const bh = fb + 9;
-        const setH = logoSize + 10 + bh;
-        const topY = H - 56 - setH; // ロゴ＋バッジのセットを1つ分上げる
-        ctx.font = `700 ${logoSize}px ui-monospace, "SF Mono", Menlo, monospace`;
-        if ('letterSpacing' in ctx) ctx.letterSpacing = '0.3em';
-        ctx.fillStyle = 'rgba(38,37,31,0.9)';
-        ctx.fillText('TOPOPO', W / 2, topY);
-        if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+        const fb = Math.round(logoSize * 0.52);
         ctx.font = `700 ${fb}px ui-monospace, "SF Mono", Menlo, monospace`;
         if ('letterSpacing' in ctx) ctx.letterSpacing = '0.18em';
         const label = '☼ Daily Challenge';
-        const bw = ctx.measureText(label).width + 16;
-        const byc = topY + logoSize * 0.5 + bh * 0.5 + 8;
+        const bw = ctx.measureText(label).width + 16, bh = fb + 9;
+        const byc = topY + logoSize * 0.5 + bh * 0.5 + 6;
         ctx.fillStyle = 'rgba(247,246,242,0.72)';
         ctx.fillRect(W / 2 - bw / 2, byc - bh / 2, bw, bh);
         ctx.strokeStyle = COL.peak; ctx.lineWidth = 1.5;
         ctx.strokeRect(W / 2 - bw / 2, byc - bh / 2, bw, bh);
         ctx.fillStyle = COL.peak;
         ctx.fillText(label, W / 2, byc);
-        if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
-      } else {
-        const topY = H - 36 - logoSize; // ロゴ1つ分上げる
-        ctx.font = `700 ${logoSize}px ui-monospace, "SF Mono", Menlo, monospace`;
-        if ('letterSpacing' in ctx) ctx.letterSpacing = '0.3em';
-        ctx.fillStyle = 'rgba(38,37,31,0.9)';
-        ctx.fillText('TOPOPO', W / 2, topY);
         if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
       }
     }
