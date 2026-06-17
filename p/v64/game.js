@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -241,7 +241,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v65'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v64'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -626,13 +626,11 @@ export function start(canvas) {
     }
   }
 
-  // 他プレイヤーの足跡を取得（同シード=同じラン番号）。失敗は無視。
-  // プレイヤーは毎フレーム フィールド円(半径FIELD_R)内にクランプされるので、円の外へ出る足跡は
-  // 旧版/壊れたデータ。半径で弾く（四角ではなく円で判定）。
+  // 他プレイヤーの足跡を取得（同シード=同じラン番号）。失敗は無視。範囲外データは除外。
   function fetchGhosts(runNumber) {
-    const lim2 = (CFG.FIELD_R * 1.02) ** 2; // 丸め誤差ぶんだけ許容
+    const lim = CFG.FIELD_R * 1.4;
     const ok = (r) => Array.isArray(r.path) && r.path.length > 1 &&
-      r.path.every((p) => p[0] * p[0] + p[1] * p[1] <= lim2);
+      r.path.every((p) => Math.abs(p[0]) < lim && Math.abs(p[1]) < lim);
     fetch('/api/runs?seed=' + runNumber)
       .then((r) => (r.ok ? r.json() : []))
       .then((runs) => { if (game && game.runNumber === runNumber && Array.isArray(runs)) game.ghosts = runs.filter(ok); })
@@ -717,7 +715,7 @@ export function start(canvas) {
       const b = radarBtnPos();
       if (Math.hypot((playTap.x - r.left) - b.x, (playTap.y - r.top) - b.y) < b.r + 6) {
         game.far = true; game.radar -= 1;
-        game.marks.push({ x: game.px, y: game.py, h: game.terrain.height(game.px, game.py), type: 'scan', pi: game.path.length });
+        game.marks.push({ x: game.px, y: game.py, h: game.terrain.height(game.px, game.py), type: 'scan' });
       }
     }
     playTap = null;
@@ -866,7 +864,7 @@ export function start(canvas) {
         for (const it of g.pickups) {
           if (!it.taken && Math.hypot(g.px - it.x, g.py - it.y) < CFG.PICKUP_R) {
             it.taken = true;
-            g.marks.push({ x: it.x, y: it.y, h: g.terrain.height(it.x, it.y), type: it.type, pi: g.path.length });
+            g.marks.push({ x: it.x, y: it.y, h: g.terrain.height(it.x, it.y), type: it.type });
             if (it.type === 'radar') { g.radar += 1; g.radarFlies.push({ t: 0 }); } // 左下へ飛ぶ演出
             else if (it.type === 'drink') g.health = Math.min(CFG.HP_MAX, g.health + CFG.HEAL); // 回復(上限以上も貯まる)
           }
@@ -1822,8 +1820,6 @@ export function start(canvas) {
     const g = game;
     const e = g.end;
     const { cx, cy, half } = e.region;
-    // ルート再生の進捗（録画/通常で共通）。取得アイコンもこの進捗まで出さない。
-    const ownReveal = recording ? clamp(recording.t / recording.routeDur, 0, 1) : clamp((e.t - 0.7) / 1.3, 0, 1);
 
     ctx.fillStyle = COL.paper;
     ctx.fillRect(0, 0, W, H);
@@ -1942,7 +1938,7 @@ export function start(canvas) {
       }
       // 再生タイミング（録画中は自分のルートを最初から再生し、他人のルートは出さない）
       const pbStart = 0.7, ownDur = 1.3, gap = 0.3, ghostDur = 1.8;
-      const ownProg = ownReveal;
+      const ownProg = recording ? clamp(recording.t / recording.routeDur, 0, 1) : clamp((e.t - pbStart) / ownDur, 0, 1);
       const ghostProg = clamp((e.t - pbStart - ownDur - gap) / ghostDur, 0, 1);
       gl.depthMask(false);
       if (!recording && e.ghostBuilt) drawTube(glR.gpbo, e.gpCount, glR.gdbo, e.gdCount, ghostProg, 1.5, [0.42, 0.40, 0.36]);
@@ -2097,12 +2093,8 @@ export function start(canvas) {
       }
     }
 
-    // 取得地点（レーダー/ボーナス）と、レーダーを使った地点。
-    // ルート再生がその地点に達するまでは出さない（拾った/使ったタイミングで現れる）。
-    const finalLen = Math.max(1, g.path.length - 1);
+    // 取得地点（レーダー/ボーナス）と、レーダーを使った地点
     for (const m of g.marks) {
-      const frac = m.pi != null ? clamp(m.pi / finalLen, 0, 1) : 0;
-      if (ownReveal < frac) continue;
       const mr = project(m.x, m.y, m.h);
       if (m.type === 'scan') {
         ctx.strokeStyle = 'rgba(31,138,138,0.85)';
