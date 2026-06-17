@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -241,7 +241,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v67'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v66'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -629,30 +629,15 @@ export function start(canvas) {
   }
 
   // 他プレイヤーの足跡を取得（同シード=同じラン番号）。失敗は無視。
-  // 不正なゴーストを除外：(1)フィールド円の外（プレイヤーは毎フレーム円内にクランプされる）
-  // (2)記録された高さが現在の地形と合わない（別地形/壊れデータ＝浮いて見える）。
+  // プレイヤーは毎フレーム フィールド円(半径FIELD_R)内にクランプされるので、円の外へ出る足跡は
+  // 旧版/壊れたデータ。半径で弾く（四角ではなく円で判定）。
   function fetchGhosts(runNumber) {
-    const lim2 = (CFG.FIELD_R * 1.02) ** 2;
+    const lim2 = (CFG.FIELD_R * 1.02) ** 2; // 丸め誤差ぶんだけ許容
+    const ok = (r) => Array.isArray(r.path) && r.path.length > 1 &&
+      r.path.every((p) => p[0] * p[0] + p[1] * p[1] <= lim2);
     fetch('/api/runs?seed=' + runNumber)
       .then((r) => (r.ok ? r.json() : []))
-      .then((runs) => {
-        if (!(game && game.runNumber === runNumber && Array.isArray(runs))) return;
-        const terr = game.terrain;
-        const ok = (r) => {
-          if (!Array.isArray(r.path) || r.path.length < 2) return false;
-          for (const p of r.path) if (p[0] * p[0] + p[1] * p[1] > lim2) return false; // 圏外
-          let n = 0, hit = 0; const step = Math.max(1, Math.floor(r.path.length / 10));
-          for (let i = 0; i < r.path.length; i += step) { const p = r.path[i]; n++; if (Math.abs(terr.height(p[0], p[1]) - p[2]) < 0.025) hit++; }
-          return n > 0 && hit / n >= 0.6; // 高さが現在の地形とおおむね一致
-        };
-        let gs = runs.filter(ok);
-        // 終了後に届いた場合は、確定済みの俯瞰領域からはみ出すものを表示しない
-        const rg = game.end && game.end.region;
-        if (game.state === 'end' && rg) {
-          gs = gs.filter((r) => r.path.every((p) => Math.abs(p[0] - rg.cx) <= rg.half && Math.abs(p[1] - rg.cy) <= rg.half));
-        }
-        game.ghosts = gs;
-      })
+      .then((runs) => { if (game && game.runNumber === runNumber && Array.isArray(runs)) game.ghosts = runs.filter(ok); })
       .catch(() => {});
   }
 
@@ -1032,11 +1017,6 @@ export function start(canvas) {
     const pk = g.field.max;
     minX = Math.min(minX, pk.x); maxX = Math.max(maxX, pk.x);
     minY = Math.min(minY, pk.y); maxY = Math.max(maxY, pk.y);
-    // 既に読み込めている他プレイヤーの足跡も収める（地形外にはみ出さないように）
-    if (g.ghosts) for (const gh of g.ghosts) {
-      const pa = gh.path; if (!pa) continue;
-      for (const p of pa) { minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]); minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); }
-    }
     const span = Math.max(maxX - minX, maxY - minY, 420);
     const half = span / 2 + span * 0.5;
     const cx = (minX + maxX) / 2;
@@ -1773,14 +1753,12 @@ export function start(canvas) {
       ctx.beginPath(); ctx.arc(fx, fy, sc + 3, 0, TAU); ctx.fill();
       drawItemGlyph(ctx, fx, fy, 'radar', sc, COL.item);
     }
-    // 左下の表示はデイリーの日付だけ（通常のシード番号は出さない）
-    if (g.daily) {
-      ctx.fillStyle = 'rgba(40,39,35,0.45)';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      ctx.font = '600 13px ui-monospace, "SF Mono", Menlo, monospace';
-      ctx.fillText('☼ ' + g.dateLabel, 16, H - 20);
-    }
+    // #ラン番号（左下・最下段）。デイリーは日付＋☼マークで示す
+    ctx.fillStyle = 'rgba(40,39,35,0.45)';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = '600 13px ui-monospace, "SF Mono", Menlo, monospace';
+    ctx.fillText(g.daily ? '☼ ' + g.dateLabel : '#' + g.runNumber, 16, H - 20);
 
     // タイトル（ready のときだけ）
     if (g.state === 'ready') {
@@ -1797,7 +1775,7 @@ export function start(canvas) {
         const label = '☼ Daily Challenge';
         const tw = ctx.measureText(label).width;
         if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
-        badge = { fb, label, w: tw + 16, h: fb + 9 }; // パディング狭め
+        badge = { fb, label, w: tw + 28, h: fb + 16 };
       }
       // ロゴ位置：デイリー時はバッジぶん上に積んで、円形と被らないようにする
       let logoY;
@@ -2201,16 +2179,16 @@ export function start(canvas) {
     // 数値は上部の三角/星/現在地のみ（大きな自己最高度表示はなし）。頂上で発光。
     drawHud(ep.h, g.field.max.h, g.best, 0, glow);
 
-    // この地形を遊んだ人数（人アイコン＋数）を小さく。デイリーのみ日付も。シード番号は出さない
+    // ラン番号（#N）と、この地形を遊んだ人数（人アイコン＋数）を小さく
     {
       const players = (g.ghosts ? g.ghosts.length : 0) + 1;
-      const bx = 18; let by = H - 24;
+      const bx = 18, by = H - 24;
       ctx.fillStyle = 'rgba(40,39,35,0.5)';
       ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
       ctx.font = '600 13px ui-monospace, "SF Mono", Menlo, monospace';
-      if (g.daily) { ctx.fillText('☼ ' + g.dateLabel, bx, by); by += 18; }
-      // 人アイコン＋人数
-      const hx = bx + 2, hy = by;
+      ctx.fillText(g.daily ? '☼ ' + g.dateLabel : '#' + g.runNumber, bx, by);
+      // 人アイコン
+      const hx = bx + 2, hy = by + 18;
       ctx.beginPath(); ctx.arc(hx, hy - 4, 2.6, 0, TAU); ctx.fill();
       ctx.beginPath(); ctx.moveTo(hx - 4, hy + 4); ctx.quadraticCurveTo(hx, hy - 2, hx + 4, hy + 4); ctx.closePath(); ctx.fill();
       ctx.fillText(String(players), hx + 10, hy);
@@ -2226,33 +2204,15 @@ export function start(canvas) {
       ctx.stroke();
     }
 
-    // 共有動画の収録中は下部に TOPOPO のロゴ（デイリーはその下に Daily Challenge バッジ）
+    // 共有動画の収録中は下部に TOPOPO のロゴを入れる
     if (recording) {
-      const logoSize = Math.round(Math.min(W, H) * 0.06);
       ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      // デイリーはバッジぶんロゴゾーンを上げて収める
-      const topY = g.daily ? H - 56 : H - 36;
-      ctx.font = `700 ${logoSize}px ui-monospace, "SF Mono", Menlo, monospace`;
+      ctx.textBaseline = 'alphabetic';
+      ctx.font = `700 ${Math.round(Math.min(W, H) * 0.06)}px ui-monospace, "SF Mono", Menlo, monospace`;
       if ('letterSpacing' in ctx) ctx.letterSpacing = '0.3em';
       ctx.fillStyle = 'rgba(38,37,31,0.9)';
-      ctx.fillText('TOPOPO', W / 2, topY);
+      ctx.fillText('TOPOPO', W / 2, H - 40);
       if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
-      if (g.daily) {
-        const fb = Math.round(logoSize * 0.52);
-        ctx.font = `700 ${fb}px ui-monospace, "SF Mono", Menlo, monospace`;
-        if ('letterSpacing' in ctx) ctx.letterSpacing = '0.18em';
-        const label = '☼ Daily Challenge';
-        const bw = ctx.measureText(label).width + 16, bh = fb + 9;
-        const byc = topY + logoSize * 0.5 + bh * 0.5 + 6;
-        ctx.fillStyle = 'rgba(247,246,242,0.72)';
-        ctx.fillRect(W / 2 - bw / 2, byc - bh / 2, bw, bh);
-        ctx.strokeStyle = COL.peak; ctx.lineWidth = 1.5;
-        ctx.strokeRect(W / 2 - bw / 2, byc - bh / 2, bw, bh);
-        ctx.fillStyle = COL.peak;
-        ctx.fillText(label, W / 2, byc);
-        if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
-      }
     }
   }
 
