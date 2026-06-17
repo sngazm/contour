@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -241,7 +241,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v72'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v71'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -720,7 +720,7 @@ export function start(canvas) {
       if (Math.abs(dx) + Math.abs(dy) > 4) endGesture.moved = true;
       const dyaw = -dx * 0.006;
       cam.yaw += dyaw; cam.yawVel = 0; endGesture.vyaw = dyaw;
-      cam.tiltOff = clamp(cam.tiltOff - dy * 0.004, -0.45, 0.62);
+      cam.tiltOff = clamp(cam.tiltOff - dy * 0.004, -0.45, 0.5);
       cam.touched = true;
       endGesture.lastX = e.clientX; endGesture.lastY = e.clientY;
     }
@@ -1860,7 +1860,7 @@ export function start(canvas) {
     // カメラ: 真上(プレイヤー中心・ゲーム中のズーム)から、引きながら傾く
     const R = Math.min(W, H) * 0.46;
     const k = easeInOut(clamp(e.t / 3.2, 0, 1));
-    const tilt = clamp(lerp(0, 0.98, k) + e.cam.tiltOff, 0.12, 1.55); // ほぼ水平(約89°)まで倒せる＝高さがよく分かる
+    const tilt = clamp(lerp(0, 0.98, k) + e.cam.tiltOff, 0.12, 1.32);
     const yaw = e.cam.yaw;
     const ct = Math.cos(tilt), st = Math.sin(tilt);
     const cyaw = Math.cos(yaw), syaw = Math.sin(yaw);
