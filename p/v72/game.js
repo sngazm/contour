@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -241,7 +241,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v73'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v72'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -584,9 +584,7 @@ export function start(canvas) {
       viewR: CFG.VIEW_RADIUS_WORLD, // 現在の視界半径(補間用)
       px: 0, py: 0,
       best: terrain.height(0, 0), // 到達した最高高度（自己記録＝スコア）
-      flash: 0,                   // 記録更新の演出(HUDの数字ポップ)
-      rec: false,                 // 自己記録を更新中＝緑表示（数値が下がると黒へ）
-      lastAlt: undefined,         // 前フレームの高度(数値)。下降検知用
+      flash: 0,                   // 記録更新の演出(HUDの数字)
       flagged: false,             // 中央タップで旗を立てて終了したか
       radar: 0,             // レーダー所持数(1回ぶんのズームアウト)
       radarFlies: [],       // レーダー取得演出（左下ボタンへ飛ぶ）
@@ -788,10 +786,7 @@ export function start(canvas) {
     if (g.state === 'play') {
       g.time += dt;
       const hNow = g.terrain.height(g.px, g.py);
-      const altNow = altOf(hNow);
-      if (hNow > g.best) { g.best = hNow; g.flash = 0.7; g.rec = true; } // 自己記録更新＝達成(緑)
-      else if (g.lastAlt !== undefined && altNow < g.lastAlt) { g.rec = false; } // 数値が下がった瞬間に黒へ
-      g.lastAlt = altNow;
+      if (hNow > g.best) { g.best = hNow; g.flash = 0.7; } // 自己記録更新＝達成
       if (g.flash > 0) g.flash -= dt;
       if (g.grace > 0) g.grace -= dt;
       for (const fl of g.radarFlies) fl.t += dt / 0.5; // 0.5秒で着地
@@ -1157,7 +1152,7 @@ export function start(canvas) {
 
   // 数値表示（★=自己記録 / ▲=目標 / ●=現在地 / ✦=ボーナス）。常時表示。
   // 数値：▲最高地点 / ★到達した最高度（小）／ ●現在の高度（やや大・記録更新でポップ／頂上で発光）
-  function drawHud(playerH, maxH, best, flash, glow, rec) {
+  function drawHud(playerH, maxH, best, flash, glow) {
     const top = 22;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -1171,7 +1166,7 @@ export function start(canvas) {
     ctx.save();
     if (g2 > 0) { ctx.shadowColor = `rgba(255,210,80,${0.8 * g2})`; ctx.shadowBlur = 18 * g2; }
     ctx.font = `700 ${Math.round(23 * pop)}px ui-monospace, "SF Mono", Menlo, monospace`;
-    ctx.fillStyle = g2 > 0 ? COL.peak : (rec ? COL.record : '#26251f'); // 記録更新中は緑(数値が下がると黒)
+    ctx.fillStyle = g2 > 0 ? COL.peak : (flash > 0 ? COL.record : '#26251f');
     ctx.fillText('● ' + altOf(playerH), W / 2, top + 44);
     ctx.restore();
   }
@@ -1651,11 +1646,9 @@ export function start(canvas) {
       const hp = clamp(g.health, 0, CFG.HP_MAX), lag = clamp(g.healthLag, 0, CFG.HP_MAX);
       ctx.lineWidth = 3.5;
       ctx.lineCap = 'butt';
-      // 本体（消費ペースで色：低=穏やか / 高=暖色）。残量が少ないと警告色。
+      // 本体（消費ペースで色：低=穏やか / 高=暖色）
       const pace = clamp(g.drainRate / 0.12, 0, 1);
-      let pc = [Math.round(lerp(70, 224, pace)), Math.round(lerp(150, 110, pace)), Math.round(lerp(120, 60, pace))];
-      if (g.health < 0.25) pc = (Math.sin(g.time * 14) > 0) ? [240, 205, 50] : [248, 248, 244]; // 25%未満：黄⇔白の点滅
-      else if (g.health < 0.5) pc = [240, 200, 45]; // 50%未満：黄色
+      const pc = [Math.round(lerp(70, 224, pace)), Math.round(lerp(150, 110, pace)), Math.round(lerp(120, 60, pace))];
       const laps = Math.max(1, Math.ceil(Math.max(hp, lag) - 1e-6)); // 表示するリング数
       for (let L = 0; L < laps; L++) {
         const rL = rr + L * dr;
@@ -1757,7 +1750,7 @@ export function start(canvas) {
     }
 
     // タイトル(ready)では数値HUDを出さない（ロゴ等との重なりを避ける）
-    if (g.state !== 'ready') drawHud(g.terrain.height(g.px, g.py), g.field.max.h, g.best, g.flash, 0, g.rec);
+    if (g.state !== 'ready') drawHud(g.terrain.height(g.px, g.py), g.field.max.h, g.best, g.flash);
     drawAltMeter(g.terrain.height(g.px, g.py), g.best, g.field.max.h);
 
     // 左下のレーダーボタン（所持時）。取得時はプレイヤーから飛んでくる演出。
