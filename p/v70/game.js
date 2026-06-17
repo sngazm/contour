@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -241,7 +241,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v71'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v70'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -852,9 +852,8 @@ export function start(canvas) {
         const thr = climbing ? climbMax : fallS;
         g.tremble = clamp((steep - thr * CFG.TREMBLE_FROM) / (thr * (1 - CFG.TREMBLE_FROM)), 0, 1);
         if (steep > climbMax || (steep > fallS && !climbing)) {
-          // 転落開始：ダメージは着地時に「落ちた高さ」に応じて発生。滑った地点をリザルト用に記録
+          // 転落開始：ダメージは着地時に「落ちた高さ」に応じて発生
           g.fall = { vx: 0, vy: 0, t: 0, h0: g.terrain.height(g.px, g.py) };
-          g.marks.push({ x: g.px, y: g.py, h: g.terrain.height(g.px, g.py), type: 'fall', pi: g.path.length });
           moved = true;
         } else if (mv.mag > 0) {
           // 進行方向の±一定距離の平均勾配（瞬間の凹凸でガタつかせない）
@@ -2137,17 +2136,6 @@ export function start(canvas) {
         ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.arc(mr.sx, mr.sy, 5, 0, TAU); ctx.stroke();
         ctx.beginPath(); ctx.arc(mr.sx, mr.sy, 9, 0, TAU); ctx.stroke();
-      } else if (m.type === 'fall') {
-        // 足を滑らせた地点：赤系の丸＋滑りを表すジグザグ
-        ctx.fillStyle = 'rgba(247,246,242,0.92)';
-        ctx.beginPath(); ctx.arc(mr.sx, mr.sy, 7, 0, TAU); ctx.fill();
-        ctx.strokeStyle = COL.dmg; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(mr.sx, mr.sy, 7, 0, TAU); ctx.stroke();
-        ctx.strokeStyle = COL.dmg; ctx.lineWidth = 1.6; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-        ctx.beginPath();
-        ctx.moveTo(mr.sx - 3.2, mr.sy - 3); ctx.lineTo(mr.sx + 0.6, mr.sy - 0.6);
-        ctx.lineTo(mr.sx - 2, mr.sy + 1.4); ctx.lineTo(mr.sx + 3.2, mr.sy + 3.6);
-        ctx.stroke();
       } else {
         const col = m.type === 'drink' ? COL.drink : COL.item;
         ctx.fillStyle = 'rgba(247,246,242,0.92)';
