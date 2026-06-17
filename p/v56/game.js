@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -22,7 +22,6 @@ const CFG = {
   HIGH_VIEW_FROM: 0.5,    // この高さ(全体比)を超えると円形レンズが広がり始める
   HIGH_VIEW_TO: 0.7,      // この高さで見晴らし全開（レンズ最大）
   ITEM_DETECT_MUL: 1.5,   // 高所(FROM以上)でアイテムを探知できる範囲＝見晴らし×これ
-  REC_TURN: 5.0,          // リザルト共有動画：地形が1回転するのにかける秒数(等速)
   ALWAYS_R: 80,           // 常に見える近距離バブル(これより外は視線遮蔽)
   ZOOM_MAX_R: 1500,       // ピンチアウトで見渡せる最大の視界半径
   GRID_N: 84,             // 等高線サンプルの格子解像度(ズームに依らず一定負荷)
@@ -239,7 +238,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v57'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v56'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -417,69 +416,6 @@ export function start(canvas) {
     });
   }
 
-  // リザルトの共有（画像／地形が等速で回る動画）。
-  const shareWrap = document.getElementById('share');
-  const shareImgBtn = document.getElementById('shareImg');
-  const shareVidBtn = document.getElementById('shareVid');
-  const ICON_IMG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.6" fill="currentColor" stroke="none"/><path d="M21 16l-5-5-6 6"/></svg>';
-  const ICON_VID = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z" fill="currentColor" stroke="none"/></svg>';
-  let recording = null; // {mr, t, dur, startYaw}
-  if (shareImgBtn) shareImgBtn.innerHTML = ICON_IMG;
-  if (shareVidBtn) shareVidBtn.innerHTML = ICON_VID;
-
-  // 共有 or 端末でダウンロード（Web Share が使えない環境のフォールバック）
-  function shareOrSave(blob, filename) {
-    const file = new File([blob], filename, { type: blob.type });
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      navigator.share({ files: [file] }).catch(() => {});
-    } else {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = filename; a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-    }
-  }
-
-  function shareImage() {
-    if (recording) return;
-    canvas.toBlob((blob) => { if (blob) shareOrSave(blob, 'topopo.png'); }, 'image/png');
-  }
-
-  function pickVideoMime() {
-    if (!window.MediaRecorder) return '';
-    for (const m of ['video/mp4;codecs=h264', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']) {
-      if (MediaRecorder.isTypeSupported(m)) return m;
-    }
-    return '';
-  }
-
-  function shareVideo() {
-    if (recording || game.state !== 'end') return;
-    const mime = pickVideoMime();
-    if (!mime || !canvas.captureStream) { shareImage(); return; } // 非対応端末は画像で代替
-    let mr;
-    try { mr = new MediaRecorder(canvas.captureStream(30), { mimeType: mime, videoBitsPerSecond: 6e6 }); }
-    catch (_) { shareImage(); return; }
-    const chunks = [];
-    mr.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-    mr.onstop = () => {
-      if (shareVidBtn) { shareVidBtn.classList.remove('rec'); shareVidBtn.disabled = false; }
-      if (shareImgBtn) shareImgBtn.disabled = false;
-      const type = mime.split(';')[0];
-      const blob = new Blob(chunks, { type });
-      shareOrSave(blob, 'topopo.' + (type === 'video/mp4' ? 'mp4' : 'webm'));
-    };
-    // 等速で1回転するよう制御（録画中は慣性/自動オービットを止める）
-    const cam = game.end.cam;
-    cam.touched = true; cam.yawVel = 0;
-    recording = { mr, t: 0, dur: CFG.REC_TURN, startYaw: cam.yaw };
-    if (shareVidBtn) { shareVidBtn.classList.add('rec'); shareVidBtn.disabled = true; }
-    if (shareImgBtn) shareImgBtn.disabled = true;
-    try { mr.start(); } catch (_) { recording = null; if (shareVidBtn) { shareVidBtn.classList.remove('rec'); shareVidBtn.disabled = false; } if (shareImgBtn) shareImgBtn.disabled = false; shareImage(); }
-  }
-  if (shareImgBtn) shareImgBtn.addEventListener('click', shareImage);
-  if (shareVidBtn) shareVidBtn.addEventListener('click', shareVideo);
-
   function newGame() {
     // デイリーチャレンジ：URLに ?daily が付いていれば、その日の日付をシードに固定
     const daily = new URLSearchParams(location.search).has('daily');
@@ -539,7 +475,6 @@ export function start(canvas) {
     endPointers.clear();
     endGesture = null;
     if (viewBtn) { viewBtn.style.display = 'none'; viewBtn.classList.remove('hot'); }
-    if (shareWrap) shareWrap.classList.remove('on'); // 共有ボタンを隠す
     fetchGhosts(runNumber);
   }
 
@@ -641,7 +576,7 @@ export function start(canvas) {
     if (game.state !== 'end' || !endPointers.has(e.pointerId)) return;
     endPointers.delete(e.pointerId);
     if (endPointers.size === 0) {
-      if (!recording && endGesture && !endGesture.moved && performance.now() - endGesture.t0 < 350 && game.end.t > 2.2) newGame();
+      if (endGesture && !endGesture.moved && performance.now() - endGesture.t0 < 350 && game.end.t > 2.2) newGame();
       else if (endGesture) game.end.cam.yawVel = (endGesture.vyaw || 0) * 16; // フリック慣性
       endGesture = null;
     } else if (endPointers.size === 1) {
@@ -878,22 +813,14 @@ export function start(canvas) {
     if (g.state === 'end') {
       g.end.t += dt;
       const cam = g.end.cam;
-      if (recording) {
-        // 共有動画：等速で1回転（録画中は慣性/自動オービットを止める）
-        recording.t += dt;
-        const p = Math.min(1, recording.t / recording.dur);
-        cam.yaw = recording.startYaw + p * TAU;
-        if (recording.t >= recording.dur) { const mr = recording.mr; recording = null; try { mr.stop(); } catch (_) {} }
-      } else {
-        // 慣性（フリックで回り続けて減衰）。指を置いていない時のみ
-        if (endPointers.size === 0) {
-          cam.yaw += cam.yawVel * dt;
-          cam.yawVel *= Math.exp(-dt * 2.2);
-          if (Math.abs(cam.yawVel) < 0.0005) cam.yawVel = 0;
-        }
-        // 未操作なら、イントロ後にゆっくり自動オービット
-        if (!cam.touched && g.end.t > 3.0) cam.yaw += 0.09 * dt;
+      // 慣性（フリックで回り続けて減衰）。指を置いていない時のみ
+      if (endPointers.size === 0) {
+        cam.yaw += cam.yawVel * dt;
+        cam.yawVel *= Math.exp(-dt * 2.2);
+        if (Math.abs(cam.yawVel) < 0.0005) cam.yawVel = 0;
       }
+      // 未操作なら、イントロ後にゆっくり自動オービット
+      if (!cam.touched && g.end.t > 3.0) cam.yaw += 0.09 * dt;
     }
   }
 
@@ -1020,7 +947,6 @@ export function start(canvas) {
     endPointers.clear();
     endGesture = null;
     if (viewBtn) { viewBtn.style.display = 'none'; viewBtn.classList.remove('hot'); }
-    if (shareWrap) shareWrap.classList.add('on'); // 共有ボタンを表示
   }
 
   // 数値表示（★=自己記録 / ▲=目標 / ●=現在地 / ✦=ボーナス）。常時表示。
