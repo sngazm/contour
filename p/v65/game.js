@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -241,7 +241,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v66'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v65'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -264,11 +264,9 @@ const ROCKET_START = 3.2, ROCKET_DUR = 1.8; // リザルトの救助ロケット
 const CONFETTI_COLORS = ['#e0512e', '#c8920a', '#2a7fd0', '#1f8a8a', '#e8e6df', '#f0c020']; // 紙吹雪
 
 // 散布。バッテリー(レーダー)は低地に、酸素ボンベ(ドリンク)は高地に寄せる。
-// シード固定の乱数で配置するので、同じシード(=同じ地形)なら全員アイテム位置も同じ。
-function spawnPickups(terrain, R, seed) {
+function spawnPickups(terrain, R) {
   const list = [];
-  const rng = makeRng(((seed >>> 0) * 2654435761 + 12345) >>> 0);
-  const rnd = () => { const a = rng() * TAU, rr = 240 + rng() * (R - 300); return { x: Math.cos(a) * rr, y: Math.sin(a) * rr }; };
+  const rnd = () => { const a = Math.random() * TAU, rr = 240 + Math.random() * (R - 300); return { x: Math.cos(a) * rr, y: Math.sin(a) * rr }; };
   const place = (type, mode) => {
     let best = rnd();
     if (mode !== 'any') {
@@ -589,7 +587,7 @@ export function start(canvas) {
       radar: 0,             // レーダー所持数(1回ぶんのズームアウト)
       radarFlies: [],       // レーダー取得演出（左下ボタンへ飛ぶ）
       marks: [],            // 取得/偵察した地点 {x,y,h,type}（リザルト表示用）
-      pickups: spawnPickups(terrain, CFG.FIELD_R, runNumber),
+      pickups: spawnPickups(terrain, CFG.FIELD_R),
       npcs: spawnNpcs(CFG.FIELD_R),
       riding: null,         // ジップライン移動中の目標 {tx,ty}
       fall: null,           // 転落中の速度 {vx,vy,t,h0}（操作不能）
@@ -1826,8 +1824,6 @@ export function start(canvas) {
     const { cx, cy, half } = e.region;
     // ルート再生の進捗（録画/通常で共通）。取得アイコンもこの進捗まで出さない。
     const ownReveal = recording ? clamp(recording.t / recording.routeDur, 0, 1) : clamp((e.t - 0.7) / 1.3, 0, 1);
-    // 他プレイヤーのルートの再生進捗（自分の再生のあと順に伸びる）。各人の終着旗もこれで出す。
-    const ghostReveal = clamp((e.t - 2.3) / 1.8, 0, 1);
 
     ctx.fillStyle = COL.paper;
     ctx.fillRect(0, 0, W, H);
@@ -1945,8 +1941,9 @@ export function start(canvas) {
         e.gpCount = pv.length / 7; e.gdCount = dv.length / 5; e.ghostBuilt = true;
       }
       // 再生タイミング（録画中は自分のルートを最初から再生し、他人のルートは出さない）
+      const pbStart = 0.7, ownDur = 1.3, gap = 0.3, ghostDur = 1.8;
       const ownProg = ownReveal;
-      const ghostProg = ghostReveal;
+      const ghostProg = clamp((e.t - pbStart - ownDur - gap) / ghostDur, 0, 1);
       gl.depthMask(false);
       if (!recording && e.ghostBuilt) drawTube(glR.gpbo, e.gpCount, glR.gdbo, e.gdCount, ghostProg, 1.5, [0.42, 0.40, 0.36]);
       drawTube(glR.pbo, e.glPathCount, glR.dbo, e.glDiscCount, ownProg, 2.3, [0.88, 0.32, 0.18]);
@@ -2122,18 +2119,10 @@ export function start(canvas) {
       }
     }
 
-    // 他プレイヤーの終着点に小さなグレーの旗（録画中は出さない）。各人のルート再生が終わったら立つ。
-    if (!recording && g.ghosts && g.ghosts.length) {
-      // 各ゴーストのルート再生が完了する進捗（チューブの連結順＝g.ghosts順）を一度求める
-      if (!e.ghostEnds || e.ghostEnds.length !== g.ghosts.length) {
-        let totalSeg = 0;
-        for (const gh of g.ghosts) { const pa = gh.path; if (pa && pa.length >= 2) totalSeg += pa.length - 1; }
-        let cum = 0; e.ghostEnds = [];
-        for (const gh of g.ghosts) { const pa = gh.path; cum += (pa && pa.length >= 2) ? pa.length - 1 : 0; e.ghostEnds.push(totalSeg > 0 ? cum / totalSeg : 1); }
-      }
-      for (let gi = 0; gi < g.ghosts.length; gi++) {
-        const pa = g.ghosts[gi].path; if (!pa || !pa.length) continue;
-        if (ghostReveal < (e.ghostEnds[gi] != null ? e.ghostEnds[gi] : 1)) continue; // 再生が終着に届くまで旗を出さない
+    // 他プレイヤーの終着点に小さなグレーの旗（録画中は出さない）
+    if (!recording && g.ghosts) {
+      for (const gh of g.ghosts) {
+        const pa = gh.path; if (!pa || !pa.length) continue;
         const lp = pa[pa.length - 1];
         const fr = project(lp[0], lp[1], lp[2]);
         ctx.strokeStyle = 'rgba(70,66,58,0.6)'; ctx.lineWidth = 1.5; ctx.lineCap = 'round';
