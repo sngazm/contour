@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -23,7 +23,6 @@ const CFG = {
   HIGH_VIEW_TO: 0.7,      // この高さで見晴らし全開（レンズ最大）
   ITEM_DETECT_MUL: 1.5,   // 高所(FROM以上)でアイテムを探知できる範囲＝見晴らし×これ
   REC_TURN: 5.0,          // リザルト共有動画：地形が1回転するのにかける秒数(等速)
-  SUMMIT_TOL: 0.006,      // 到達最高度がフィールド最高とこの差以内なら「頂上到達」とみなす
   ALWAYS_R: 80,           // 常に見える近距離バブル(これより外は視線遮蔽)
   ZOOM_MAX_R: 1500,       // ピンチアウトで見渡せる最大の視界半径
   GRID_N: 84,             // 等高線サンプルの格子解像度(ズームに依らず一定負荷)
@@ -240,7 +239,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v60'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v59'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -257,9 +256,6 @@ const COL = {
   heal: '#3a90e0',      // 回復の青
   dmg: '#d8392f',       // ダメージの赤
 };
-
-const ROCKET_START = 3.2, ROCKET_DUR = 1.8; // リザルトの救助ロケット降下タイミング
-const CONFETTI_COLORS = ['#e0512e', '#c8920a', '#2a7fd0', '#1f8a8a', '#e8e6df', '#f0c020']; // 紙吹雪
 
 // 散布。バッテリー(レーダー)は低地に、酸素ボンベ(ドリンク)は高地に寄せる。
 function spawnPickups(terrain, R) {
@@ -504,18 +500,6 @@ export function start(canvas) {
   };
   const getDailyDone = () => { try { return localStorage.getItem('topopo_daily_done'); } catch (_) { return null; } };
   const setDailyDone = () => { try { localStorage.setItem('topopo_daily_done', dailyLabel()); } catch (_) {} };
-
-  // 紙吹雪の1粒。spread=初期配置（画面内外に散らす）/ false=上から再投入（ループ用）
-  const mkConfetti = (spread) => ({
-    x: Math.random() * W,
-    y: spread ? Math.random() * 1.2 * H - 0.6 * H : -14,
-    vy: 120 + Math.random() * 150,
-    vx: (Math.random() - 0.5) * 40,
-    rot: Math.random() * TAU, vrot: (Math.random() - 0.5) * 6,
-    w: 5 + Math.random() * 6, h: 3 + Math.random() * 4,
-    col: CONFETTI_COLORS[(Math.random() * CONFETTI_COLORS.length) | 0],
-    ph: Math.random() * TAU, sw: 2 + Math.random() * 3, sa: 20 + Math.random() * 30,
-  });
 
   function newGame() {
     // デイリーチャレンジ：URLに ?daily が付いていれば、その日の日付をシードに固定
@@ -941,16 +925,6 @@ export function start(canvas) {
         // 未操作なら、イントロ後にゆっくり自動オービット
         if (!cam.touched && g.end.t > 3.0) cam.yaw += 0.09 * dt;
       }
-      // 紙吹雪（頂上到達でロケット着地後・録画中も降り続く）
-      if (g.end.summit && g.end.t > ROCKET_START + ROCKET_DUR) {
-        if (!g.end.confetti) { g.end.confetti = []; for (let i = 0; i < 100; i++) g.end.confetti.push(mkConfetti(true)); }
-        for (const c of g.end.confetti) {
-          c.y += c.vy * dt;
-          c.x += c.vx * dt + Math.sin((g.end.t + c.ph) * c.sw) * c.sa * dt;
-          c.rot += c.vrot * dt;
-          if (c.y > H + 14) Object.assign(c, mkConfetti(false));
-        }
-      }
     }
   }
 
@@ -1020,8 +994,6 @@ export function start(canvas) {
         h: Float32Array.from(sh), n: sh.length,
       },
       cam: { yaw: 0, yawVel: 0, zoom: 1, tiltOff: 0, touched: false },
-      summit: g.best >= g.field.max.h - CFG.SUMMIT_TOL, // 頂上到達で終わったか（紙吹雪/発光）
-      confetti: null,
       glCount: 0, glPathCount: 0, glDiscCount: 0, ghostBuilt: false, gpCount: 0, gdCount: 0,
     };
     // WebGL 用メッシュをアップロード（頂点= worldX,worldY,height,rv / 三角形インデックス）
@@ -1084,24 +1056,19 @@ export function start(canvas) {
   }
 
   // 数値表示（★=自己記録 / ▲=目標 / ●=現在地 / ✦=ボーナス）。常時表示。
-  // 数値：▲最高地点 / ★到達した最高度（小）／ ●現在の高度（大・記録更新でポップ／頂上で発光）
-  function drawHud(playerH, maxH, best, flash, glow) {
-    const top = 24;
+  function drawHud(playerH, maxH, best, flash) {
+    const top = 26;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    const pop = flash > 0 ? 1 + 0.5 * (flash / 0.7) : 1;
+    ctx.font = `700 ${Math.round(20 * pop)}px ui-monospace, "SF Mono", Menlo, monospace`;
+    ctx.fillStyle = flash > 0 ? COL.accent : '#26251f';
+    ctx.fillText('★ ' + altOf(best), W / 2, top);
     ctx.font = '600 14px ui-monospace, "SF Mono", Menlo, monospace';
     ctx.fillStyle = COL.peak;
-    ctx.fillText('▲ ' + altOf(maxH), W / 2, top);
-    ctx.fillStyle = 'rgba(40,39,35,0.55)';
-    ctx.fillText('★ ' + altOf(best), W / 2, top + 22);
-    const g2 = glow || 0;
-    const pop = flash > 0 ? 1 + 0.5 * (flash / 0.7) : 1;
-    ctx.save();
-    if (g2 > 0) { ctx.shadowColor = `rgba(255,210,80,${0.8 * g2})`; ctx.shadowBlur = 20 * g2; }
-    ctx.font = `700 ${Math.round(30 * pop)}px ui-monospace, "SF Mono", Menlo, monospace`;
-    ctx.fillStyle = g2 > 0 ? COL.peak : (flash > 0 ? COL.accent : '#26251f');
-    ctx.fillText('● ' + altOf(playerH), W / 2, top + 56);
-    ctx.restore();
+    ctx.fillText('▲ ' + altOf(maxH), W / 2, top + 24);
+    ctx.fillStyle = 'rgba(40,39,35,0.5)';
+    ctx.fillText('● ' + altOf(playerH), W / 2, top + 44);
   }
 
   // 左端の縦型・高度計（上端＝フィールド最高。4色スケール＋現在地/記録/目標）
@@ -2050,6 +2017,7 @@ export function start(canvas) {
     // 最高地点へロケットが降りてくる（＝どこが頂上だったかの答え合わせ）
     const pk = g.field.max;
     const pkr = project(pk.x, pk.y, pk.h);
+    const ROCKET_START = 3.2, ROCKET_DUR = 1.8;
     if (e.t > ROCKET_START) {
       const prog = clamp((e.t - ROCKET_START) / ROCKET_DUR, 0, 1);
       const ry = lerp(-60, pkr.sy, easeOut(prog)); // 上空から着地点へ
@@ -2063,31 +2031,14 @@ export function start(canvas) {
 
     if (masking) ctx.restore();
 
-    // 頂上到達なら発光（ロケット着地後・録画中も続く）
-    const glow = (e.summit && e.t > ROCKET_START + ROCKET_DUR) ? 0.6 + 0.4 * Math.sin(e.t * 4) : 0;
-
-    // 紙吹雪（頂上到達。録画中も降り続く）
-    if (e.confetti) {
-      for (const c of e.confetti) {
-        ctx.save();
-        ctx.translate(c.x, c.y); ctx.rotate(c.rot);
-        ctx.fillStyle = c.col;
-        ctx.fillRect(-c.w / 2, -c.h / 2, c.w, c.h);
-        ctx.restore();
-      }
-    }
-
-    // 最終スコア（到達した最高度・大きく。頂上で発光）
+    // 最終スコア（大きく）
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.save();
-    if (glow > 0) { ctx.shadowColor = `rgba(255,210,80,${0.9 * glow})`; ctx.shadowBlur = 26 * glow; }
     ctx.font = `700 ${Math.min(W, H) * 0.13}px ui-monospace, "SF Mono", Menlo, monospace`;
-    ctx.fillStyle = glow > 0 ? COL.peak : 'rgba(38,37,31,0.9)';
+    ctx.fillStyle = 'rgba(38,37,31,0.9)';
     ctx.fillText('★ ' + altOf(g.best), W / 2, H * 0.18);
-    ctx.restore();
 
-    drawHud(ep.h, g.field.max.h, g.best, 0, glow);
+    drawHud(ep.h, g.field.max.h, g.best, 0);
 
     // ラン番号（#N）と、この地形を遊んだ人数（人アイコン＋数）を小さく
     {
@@ -2112,17 +2063,6 @@ export function start(canvas) {
       ctx.beginPath();
       ctx.arc(W / 2, H * 0.9, 8 + rp * 26, 0, TAU);
       ctx.stroke();
-    }
-
-    // 共有動画の収録中は下部に TOPOPO のロゴを入れる
-    if (recording) {
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'alphabetic';
-      ctx.font = `700 ${Math.round(Math.min(W, H) * 0.06)}px ui-monospace, "SF Mono", Menlo, monospace`;
-      if ('letterSpacing' in ctx) ctx.letterSpacing = '0.3em';
-      ctx.fillStyle = 'rgba(38,37,31,0.9)';
-      ctx.fillText('TOPOPO', W / 2, H - 40);
-      if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
     }
   }
 

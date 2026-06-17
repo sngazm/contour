@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#e7e6e0" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>TOPOPO</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #e7e6e0; overflow: hidden; }
+    body { overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+    canvas { display: block; touch-action: none; }
+
+    #viewbtn {
+      position: fixed; right: calc(18px + env(safe-area-inset-right)); bottom: calc(24px + env(safe-area-inset-bottom));
+      width: 54px; height: 54px; border-radius: 50%;
+      border: 1.5px solid rgba(40,39,35,0.35); background: rgba(247,246,242,0.82);
+      color: #26251f; display: grid; place-items: center; padding: 0; cursor: pointer;
+      -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); touch-action: manipulation;
+    }
+    #viewbtn svg { width: 24px; height: 24px; display: block; }
+    #viewbtn:active { transform: scale(0.94); }
+    /* 最高点付近で旗ボタンを強調（言葉なし・脈動） */
+    #viewbtn.hot { color: #f7f6f2; background: #e0512e; border-color: #e0512e; animation: flagpulse 1s ease-in-out infinite; }
+    @keyframes flagpulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(224,81,46,0.55); }
+      50% { box-shadow: 0 0 0 10px rgba(224,81,46,0); }
+    }
+
+    /* 画面下中央の小さなリンク（バージョン一覧 / ストーリー / デイリー） */
+    #links {
+      position: fixed; left: 50%; transform: translateX(-50%);
+      bottom: calc(8px + env(safe-area-inset-bottom));
+      display: flex; flex-direction: row; gap: 16px; z-index: 5;
+    }
+    #links a {
+      font: 11px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: 0.1em;
+      color: rgba(40,39,35,0.42); text-decoration: none; padding: 4px 6px;
+    }
+    #links a:active { color: rgba(40,39,35,0.7); }
+
+    /* リザルトの共有ボタン（画像／回転動画）。右下に縦並び。 */
+    #share {
+      position: fixed; right: calc(18px + env(safe-area-inset-right)); bottom: calc(24px + env(safe-area-inset-bottom));
+      display: none; flex-direction: column; gap: 12px; z-index: 6;
+    }
+    #share.on { display: flex; }
+    #share button {
+      width: 50px; height: 50px; border-radius: 50%;
+      border: 1.5px solid rgba(40,39,35,0.3); background: rgba(247,246,242,0.9);
+      color: #26251f; display: grid; place-items: center; padding: 0; cursor: pointer;
+      -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); touch-action: manipulation;
+    }
+    #share button svg { width: 23px; height: 23px; display: block; }
+    #share button:active { transform: scale(0.94); }
+    #share button:disabled { opacity: 0.5; }
+    /* 録画中は動画ボタンを赤く脈動 */
+    #share button.rec { color: #f7f6f2; background: #e0512e; border-color: #e0512e; animation: flagpulse 1s ease-in-out infinite; }
+
+    /* デイリー挑戦済みのロック画面 */
+    #dailylock {
+      position: fixed; inset: 0; z-index: 20; display: none;
+      flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+      background: rgba(231,230,224,0.94); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+      font-family: ui-monospace, "SF Mono", Menlo, monospace; color: #26251f; text-align: center; padding: 24px;
+    }
+    #dailylock.on { display: flex; }
+    #dailylock .sun { font-size: 34px; color: #c8920a; }
+    #dailylock .msg { font-size: 15px; font-weight: 700; letter-spacing: .06em; }
+    #dailylock .sub { font-size: 12px; color: #6f6a60; margin-top: -6px; }
+    #dailylock a {
+      text-decoration: none; color: #26251f; font-size: 14px; letter-spacing: .04em;
+      border: 1px solid #26251f; border-radius: 12px; padding: 12px 22px; background: #fbfbf8;
+    }
+    #dailylock a.sub-link { border: 0; color: #8a877d; font-size: 12px; padding: 4px; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <button id="viewbtn" aria-label="flag"></button>
+  <div id="share">
+    <button id="shareVid" aria-label="share video"></button>
+    <button id="shareImg" aria-label="share image"></button>
+  </div>
+  <nav id="links">
+    <a href="/versions/">≡ versions</a>
+    <a href="/story.html">story</a>
+    <a href="/?daily">☼ daily</a>
+  </nav>
+  <div id="dailylock">
+    <div class="sun">☼</div>
+    <div class="msg">今日のデイリーは挑戦済み</div>
+    <div class="sub">また明日（日付が変わると挑戦できます）</div>
+    <a href="/">▶ 通常モードであそぶ</a>
+    <a class="sub-link" href="/versions/">≡ バージョン一覧へ</a>
+  </div>
+  <script type="module">
+    import { start } from './game.js';
+    start(document.getElementById('c'));
+  </script>
+</body>
+</html>
