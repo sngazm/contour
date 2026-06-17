@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -22,8 +22,7 @@ const CFG = {
   HIGH_VIEW_FROM: 0.5,    // この高さ(全体比)を超えると円形レンズが広がり始める
   HIGH_VIEW_TO: 0.7,      // この高さで見晴らし全開（レンズ最大）
   ITEM_DETECT_MUL: 1.5,   // 高所(FROM以上)でアイテムを探知できる範囲＝見晴らし×これ
-  REC_TURN: 7.0,          // リザルト共有動画：地形が1回転するのにかける秒数(等速・遅め)
-  REC_ROUTE: 2.6,         // 共有動画でルートを再生しきる秒数
+  REC_TURN: 5.0,          // リザルト共有動画：地形が1回転するのにかける秒数(等速)
   SUMMIT_TOL: 0.006,      // 到達最高度がフィールド最高とこの差以内なら「頂上到達」とみなす
   ALWAYS_R: 80,           // 常に見える近距離バブル(これより外は視線遮蔽)
   ZOOM_MAX_R: 1500,       // ピンチアウトで見渡せる最大の視界半径
@@ -241,7 +240,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v62'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v61'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -257,7 +256,6 @@ const COL = {
   drink: '#2a7fd0',     // ドリンク缶（回復）
   heal: '#3a90e0',      // 回復の青
   dmg: '#d8392f',       // ダメージの赤
-  record: '#2e9e5b',    // 自己記録更新（緑＝達成。赤は警告色なので避ける）
 };
 
 const ROCKET_START = 3.2, ROCKET_DUR = 1.8; // リザルトの救助ロケット降下タイミング
@@ -486,15 +484,11 @@ export function start(canvas) {
       const blob = new Blob(chunks, { type });
       shareOrSave(blob, 'topopo.' + (type === 'video/mp4' ? 'mp4' : 'webm'));
     };
-    // 等速回転を制御（録画中は慣性/自動オービットを止める）。
-    // 1セット=「ルート再生→ロケット到着→(到達なら)紙吹雪→2秒」。これが収まる整数回転ぶんの長さに。
+    // 等速で1回転するよう制御（録画中は慣性/自動オービットを止める）
     const cam = game.end.cam;
     cam.touched = true; cam.yawVel = 0;
     game.end.confetti = null; // 録画では「ルート→旗→紙吹雪」の順に出すためリセット
-    const turn = CFG.REC_TURN, routeDur = CFG.REC_ROUTE, rktDur = ROCKET_DUR;
-    const seqEnd = routeDur + rktDur + 2.0;
-    const dur = Math.ceil(seqEnd / turn) * turn;
-    recording = { mr, t: 0, dur, turn, routeDur, rktDur, startYaw: cam.yaw };
+    recording = { mr, t: 0, dur: CFG.REC_TURN, startYaw: cam.yaw };
     if (shareVidBtn) { shareVidBtn.classList.add('rec'); shareVidBtn.disabled = true; }
     if (shareImgBtn) shareImgBtn.disabled = true;
     try { mr.start(); } catch (_) { recording = null; if (shareVidBtn) { shareVidBtn.classList.remove('rec'); shareVidBtn.disabled = false; } if (shareImgBtn) shareImgBtn.disabled = false; shareImage(); }
@@ -948,9 +942,10 @@ export function start(canvas) {
       g.end.t += dt;
       const cam = g.end.cam;
       if (recording) {
-        // 共有動画：等速回転（1回転=turn秒。録画中は慣性/自動オービットを止める）
+        // 共有動画：等速で1回転（録画中は慣性/自動オービットを止める）
         recording.t += dt;
-        cam.yaw = recording.startYaw + (recording.t / recording.turn) * TAU;
+        const p = Math.min(1, recording.t / recording.dur);
+        cam.yaw = recording.startYaw + p * TAU;
         if (recording.t >= recording.dur) { const mr = recording.mr; recording = null; try { mr.stop(); } catch (_) {} }
       } else {
         // 慣性（フリックで回り続けて減衰）。指を置いていない時のみ
@@ -962,8 +957,8 @@ export function start(canvas) {
         // 未操作なら、イントロ後にゆっくり自動オービット
         if (!cam.touched && g.end.t > 3.0) cam.yaw += 0.09 * dt;
       }
-      // 紙吹雪（頂上到達でロケット着地後・録画中も降り続く）。録画中はロケット到着後に降らせる
-      const confReady = recording ? (recording.t >= recording.routeDur + recording.rktDur) : (g.end.t > ROCKET_START + ROCKET_DUR);
+      // 紙吹雪（頂上到達でロケット着地後・録画中も降り続く）。録画中は旗が出てから降らせる
+      const confReady = recording ? (recording.t >= recording.dur * 0.72) : (g.end.t > ROCKET_START + ROCKET_DUR);
       if (g.end.summit && confReady) {
         if (!g.end.confetti) { g.end.confetti = []; for (let i = 0; i < 100; i++) g.end.confetti.push(mkConfetti(true)); }
         for (const c of g.end.confetti) {
@@ -1108,23 +1103,23 @@ export function start(canvas) {
   }
 
   // 数値表示（★=自己記録 / ▲=目標 / ●=現在地 / ✦=ボーナス）。常時表示。
-  // 数値：▲最高地点 / ★到達した最高度（小）／ ●現在の高度（やや大・記録更新でポップ／頂上で発光）
+  // 数値：▲最高地点 / ★到達した最高度（小）／ ●現在の高度（大・記録更新でポップ／頂上で発光）
   function drawHud(playerH, maxH, best, flash, glow) {
-    const top = 22;
+    const top = 24;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = '600 13px ui-monospace, "SF Mono", Menlo, monospace';
+    ctx.font = '600 14px ui-monospace, "SF Mono", Menlo, monospace';
     ctx.fillStyle = COL.peak;
     ctx.fillText('▲ ' + altOf(maxH), W / 2, top);
     ctx.fillStyle = 'rgba(40,39,35,0.55)';
-    ctx.fillText('★ ' + altOf(best), W / 2, top + 19);
+    ctx.fillText('★ ' + altOf(best), W / 2, top + 22);
     const g2 = glow || 0;
-    const pop = flash > 0 ? 1 + 0.4 * (flash / 0.7) : 1;
+    const pop = flash > 0 ? 1 + 0.5 * (flash / 0.7) : 1;
     ctx.save();
-    if (g2 > 0) { ctx.shadowColor = `rgba(255,210,80,${0.8 * g2})`; ctx.shadowBlur = 18 * g2; }
-    ctx.font = `700 ${Math.round(23 * pop)}px ui-monospace, "SF Mono", Menlo, monospace`;
-    ctx.fillStyle = g2 > 0 ? COL.peak : (flash > 0 ? COL.record : '#26251f');
-    ctx.fillText('● ' + altOf(playerH), W / 2, top + 44);
+    if (g2 > 0) { ctx.shadowColor = `rgba(255,210,80,${0.8 * g2})`; ctx.shadowBlur = 20 * g2; }
+    ctx.font = `700 ${Math.round(30 * pop)}px ui-monospace, "SF Mono", Menlo, monospace`;
+    ctx.fillStyle = g2 > 0 ? COL.peak : (flash > 0 ? COL.accent : '#26251f');
+    ctx.fillText('● ' + altOf(playerH), W / 2, top + 56);
     ctx.restore();
   }
 
@@ -1147,16 +1142,13 @@ export function start(canvas) {
     ctx.strokeStyle = 'rgba(40,39,35,0.35)';
     ctx.lineWidth = 1;
     ctx.strokeRect(x, y1, w, y0 - y1);
-    // 目標(▲) と 記録(★)。近接時は★を少し下げて重なりを避ける
-    const yMax = at(maxH);
-    let yBest = at(best);
-    if (Math.abs(yBest - yMax) < 12) yBest = yMax + 12;
+    // 目標(▲) と 記録(★)
+    ctx.fillStyle = COL.peak;
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.font = '600 11px ui-monospace, Menlo, monospace';
-    ctx.fillStyle = COL.peak;
-    ctx.fillText('▲', x + w + 3, yMax);
+    ctx.fillText('▲', x + w + 3, at(maxH));
     ctx.fillStyle = '#26251f';
-    ctx.fillText('★', x + w + 3, yBest);
+    ctx.fillText('★', x + w + 3, at(best));
     // 現在地マーカー（右向き三角）
     const yc = at(curH);
     ctx.fillStyle = '#26251f';
@@ -1705,8 +1697,7 @@ export function start(canvas) {
       ctx.fill();
     }
 
-    // タイトル(ready)では数値HUDを出さない（ロゴ等との重なりを避ける）
-    if (g.state !== 'ready') drawHud(g.terrain.height(g.px, g.py), g.field.max.h, g.best, g.flash);
+    drawHud(g.terrain.height(g.px, g.py), g.field.max.h, g.best, g.flash);
     drawAltMeter(g.terrain.height(g.px, g.py), g.best, g.field.max.h);
 
     // 左下のレーダーボタン（所持時）。取得時はプレイヤーから飛んでくる演出。
@@ -1921,7 +1912,7 @@ export function start(canvas) {
       }
       // 再生タイミング（録画中は自分のルートを最初から再生し、他人のルートは出さない）
       const pbStart = 0.7, ownDur = 1.3, gap = 0.3, ghostDur = 1.8;
-      const ownProg = recording ? clamp(recording.t / recording.routeDur, 0, 1) : clamp((e.t - pbStart) / ownDur, 0, 1);
+      const ownProg = recording ? clamp(recording.t / (recording.dur * 0.7), 0, 1) : clamp((e.t - pbStart) / ownDur, 0, 1);
       const ghostProg = clamp((e.t - pbStart - ownDur - gap) / ghostDur, 0, 1);
       gl.depthMask(false);
       if (!recording && e.ghostBuilt) drawTube(glR.gpbo, e.gpCount, glR.gdbo, e.gdCount, ghostProg, 1.5, [0.42, 0.40, 0.36]);
@@ -2048,7 +2039,7 @@ export function start(canvas) {
     // 到達地点: 高さを示す縦線 + 脈打つ点（録画中はルート再生が終わってから出す）
     const epr = project(ep.x, ep.y, ep.h);
     const base = project(ep.x, ep.y, e.gmin);
-    const showEnd = !recording || recording.t >= recording.routeDur;
+    const showEnd = !recording || recording.t >= recording.dur * 0.7;
     if (showEnd) {
       ctx.strokeStyle = 'rgba(224,81,46,0.45)';
       ctx.setLineDash([4, 5]);
@@ -2107,13 +2098,11 @@ export function start(canvas) {
       }
     }
 
-    // 最高地点へロケットが降りてくる（＝どこが頂上だったかの答え合わせ）。録画中はルート再生後に降下
+    // 最高地点へロケットが降りてくる（＝どこが頂上だったかの答え合わせ）
     const pk = g.field.max;
     const pkr = project(pk.x, pk.y, pk.h);
-    let prog = -1;
-    if (recording) { if (recording.t > recording.routeDur) prog = clamp((recording.t - recording.routeDur) / recording.rktDur, 0, 1); }
-    else if (e.t > ROCKET_START) prog = clamp((e.t - ROCKET_START) / ROCKET_DUR, 0, 1);
-    if (prog >= 0) {
+    if (e.t > ROCKET_START) {
+      const prog = clamp((e.t - ROCKET_START) / ROCKET_DUR, 0, 1);
       const ry = lerp(-60, pkr.sy, easeOut(prog)); // 上空から着地点へ
       const landed = prog >= 1;
       // 着地点の輪（マーカー）
@@ -2125,9 +2114,8 @@ export function start(canvas) {
 
     if (masking) ctx.restore();
 
-    // 頂上到達なら高度表示を発光（ロケット着地後・録画中はその進行に合わせる）
-    const glowOn = recording ? (recording.t >= recording.routeDur + recording.rktDur) : (e.t > ROCKET_START + ROCKET_DUR);
-    const glow = (e.summit && glowOn) ? 0.6 + 0.4 * Math.sin(e.t * 4) : 0;
+    // 頂上到達なら発光（ロケット着地後・録画中も続く）
+    const glow = (e.summit && e.t > ROCKET_START + ROCKET_DUR) ? 0.6 + 0.4 * Math.sin(e.t * 4) : 0;
 
     // 紙吹雪（頂上到達。録画中も降り続く）
     if (e.confetti) {
@@ -2140,7 +2128,16 @@ export function start(canvas) {
       }
     }
 
-    // 数値は上部の三角/星/現在地のみ（大きな自己最高度表示はなし）。頂上で発光。
+    // 最終スコア（到達した最高度・大きく。頂上で発光）
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.save();
+    if (glow > 0) { ctx.shadowColor = `rgba(255,210,80,${0.9 * glow})`; ctx.shadowBlur = 26 * glow; }
+    ctx.font = `700 ${Math.min(W, H) * 0.13}px ui-monospace, "SF Mono", Menlo, monospace`;
+    ctx.fillStyle = glow > 0 ? COL.peak : 'rgba(38,37,31,0.9)';
+    ctx.fillText('★ ' + altOf(g.best), W / 2, H * 0.18);
+    ctx.restore();
+
     drawHud(ep.h, g.field.max.h, g.best, 0, glow);
 
     // ラン番号（#N）と、この地形を遊んだ人数（人アイコン＋数）を小さく

@@ -42,16 +42,18 @@
     #links a:active { color: rgba(40,39,35,0.8); }
     #links svg { width: 15px; height: 15px; display: block; }
 
-    /* デイリーチャレンジ（円の下中央・ready かつ通常モードのとき表示）。普通のテキストリンク */
+    /* デイリーチャレンジ（円の下中央・ready かつ通常モードのとき表示） */
     #dailycta {
       position: fixed; left: 50%; transform: translateX(-50%);
       top: calc(50% + min(46vw, 46vh) + 22px);
-      display: none;
-      font: 13px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: 0.12em;
-      color: #c8920a; text-decoration: none; padding: 8px 10px; white-space: nowrap;
+      display: none; align-items: center; gap: 8px;
+      font: 13px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: 0.14em;
+      color: #c8920a; text-decoration: none;
+      border: 1.5px solid #c8920a; border-radius: 999px; padding: 11px 20px;
+      background: rgba(247,246,242,0.88);
     }
-    body.titlescreen:not(.dailymode) #dailycta { display: block; }
-    #dailycta:active { color: #a87a08; }
+    body.titlescreen:not(.dailymode) #dailycta { display: inline-flex; }
+    #dailycta:active { transform: translateX(-50%) scale(0.96); }
 
     /* リザルトの共有ボタン（画像／回転動画）。右下に縦並び。 */
     #share {
