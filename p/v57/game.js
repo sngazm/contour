@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -239,7 +239,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v58'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v57'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -480,26 +480,9 @@ export function start(canvas) {
   if (shareImgBtn) shareImgBtn.addEventListener('click', shareImage);
   if (shareVidBtn) shareVidBtn.addEventListener('click', shareVideo);
 
-  // デイリーチャレンジは同じ端末で1日1回まで。挑戦済み判定（JST日付）。
-  const dailyLock = document.getElementById('dailylock');
-  const dailyLabel = () => {
-    const d = new Date(Date.now() + 9 * 3600 * 1000);
-    const p2 = (n) => String(n).padStart(2, '0');
-    return d.getUTCFullYear() + '-' + p2(d.getUTCMonth() + 1) + '-' + p2(d.getUTCDate());
-  };
-  const getDailyDone = () => { try { return localStorage.getItem('topopo_daily_done'); } catch (_) { return null; } };
-  const setDailyDone = () => { try { localStorage.setItem('topopo_daily_done', dailyLabel()); } catch (_) {} };
-
   function newGame() {
     // デイリーチャレンジ：URLに ?daily が付いていれば、その日の日付をシードに固定
-    let daily = new URLSearchParams(location.search).has('daily');
-    // デイリーは同じ端末で1日1回だけ。挑戦済みならロック画面を出して通常地形を裏に用意
-    if (daily && getDailyDone() === dailyLabel()) {
-      daily = false;
-      if (dailyLock) dailyLock.classList.add('on');
-    } else if (dailyLock) {
-      dailyLock.classList.remove('on');
-    }
+    const daily = new URLSearchParams(location.search).has('daily');
     let runNumber = 1, dateLabel = '';
     if (daily) {
       // JST(UTC+9)の日付を YYYYMMDD の整数に。全員その日は同じ地形・足跡が貯まる
@@ -921,7 +904,6 @@ export function start(canvas) {
       g.path.push({ x: g.px, y: g.py, h: g.terrain.height(g.px, g.py) });
     }
     postRun(); // 自分のランを記録（他プレイヤーの足跡になる）
-    if (g.daily) setDailyDone(); // デイリーは1日1回（この端末では挑戦済みに）
     // 軌跡の範囲＋余白で俯瞰領域を決める
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const p of g.path) {
@@ -1806,12 +1788,12 @@ export function start(canvas) {
         gl.bindBuffer(gl.ARRAY_BUFFER, glR.gdbo); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(dv), gl.STATIC_DRAW);
         e.gpCount = pv.length / 7; e.gdCount = dv.length / 5; e.ghostBuilt = true;
       }
-      // 再生タイミング（録画中は自分のルートを最初から再生し、他人のルートは出さない）
+      // 再生タイミング
       const pbStart = 0.7, ownDur = 1.3, gap = 0.3, ghostDur = 1.8;
-      const ownProg = recording ? clamp(recording.t / (recording.dur * 0.7), 0, 1) : clamp((e.t - pbStart) / ownDur, 0, 1);
+      const ownProg = clamp((e.t - pbStart) / ownDur, 0, 1);
       const ghostProg = clamp((e.t - pbStart - ownDur - gap) / ghostDur, 0, 1);
       gl.depthMask(false);
-      if (!recording && e.ghostBuilt) drawTube(glR.gpbo, e.gpCount, glR.gdbo, e.gdCount, ghostProg, 1.5, [0.42, 0.40, 0.36]);
+      if (e.ghostBuilt) drawTube(glR.gpbo, e.gpCount, glR.gdbo, e.gdCount, ghostProg, 1.5, [0.42, 0.40, 0.36]);
       drawTube(glR.pbo, e.glPathCount, glR.dbo, e.glDiscCount, ownProg, 2.3, [0.88, 0.32, 0.18]);
       gl.depthMask(true);
     }
@@ -1893,8 +1875,8 @@ export function start(canvas) {
       ctx.globalCompositeOperation = 'source-over';
     }
 
-    // 他プレイヤーの足跡（GL不可時のみ2Dの薄線で。GL時はグレーのチューブで再生）。録画中は出さない
-    if (!recording && !useGL && g.ghosts && g.ghosts.length) {
+    // 他プレイヤーの足跡（GL不可時のみ2Dの薄線で。GL時はグレーのチューブで再生）
+    if (!useGL && g.ghosts && g.ghosts.length) {
       ctx.strokeStyle = 'rgba(70,66,58,0.16)';
       ctx.lineWidth = 1.2;
       for (const gh of g.ghosts) {
@@ -1978,8 +1960,8 @@ export function start(canvas) {
       }
     }
 
-    // 他プレイヤーの終着点に小さなグレーの旗（録画中は出さない）
-    if (!recording && g.ghosts) {
+    // 他プレイヤーの終着点に小さなグレーの旗
+    if (g.ghosts) {
       for (const gh of g.ghosts) {
         const pa = gh.path; if (!pa || !pa.length) continue;
         const lp = pa[pa.length - 1];
@@ -2032,8 +2014,8 @@ export function start(canvas) {
       ctx.fillText(String(players), hx + 10, hy);
     }
 
-    // 再挑戦を促す微かなパルス（イントロ後・言葉なし）。録画中は消す
-    if (!recording && e.t > 2.2) {
+    // 再挑戦を促す微かなパルス（イントロ後・言葉なし）
+    if (e.t > 2.2) {
       const rp = (e.t % 1.8) / 1.8;
       ctx.strokeStyle = `rgba(38,37,31,${0.35 * (1 - rp)})`;
       ctx.lineWidth = 1.5;
