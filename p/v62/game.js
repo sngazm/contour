@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -241,7 +241,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v63'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v62'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -440,9 +440,7 @@ export function start(canvas) {
   const shareVidBtn = document.getElementById('shareVid');
   const ICON_IMG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.6" fill="currentColor" stroke="none"/><path d="M21 16l-5-5-6 6"/></svg>';
   const ICON_VID = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z" fill="currentColor" stroke="none"/></svg>';
-  const ICON_UP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg>';
   let recording = null; // {mr, t, dur, startYaw}
-  let pendingShare = null; // 録画完了後、ユーザー操作で共有するための保留データ {blob, filename}
   if (shareImgBtn) shareImgBtn.innerHTML = ICON_IMG;
   if (shareVidBtn) shareVidBtn.innerHTML = ICON_VID;
 
@@ -474,14 +472,6 @@ export function start(canvas) {
 
   function shareVideo() {
     if (recording || game.state !== 'end') return;
-    // 録画直後：保留中の動画があれば、このタップ（ユーザー操作）で共有する
-    // ※録画は数秒かかり navigator.share のユーザー操作許可が切れるため、共有は次のタップで行う
-    if (pendingShare) {
-      const ps = pendingShare; pendingShare = null;
-      if (shareVidBtn) { shareVidBtn.classList.remove('ready'); shareVidBtn.innerHTML = ICON_VID; }
-      shareOrSave(ps.blob, ps.filename);
-      return;
-    }
     const mime = pickVideoMime();
     if (!mime || !canvas.captureStream) { shareImage(); return; } // 非対応端末は画像で代替
     let mr;
@@ -494,9 +484,7 @@ export function start(canvas) {
       if (shareImgBtn) shareImgBtn.disabled = false;
       const type = mime.split(';')[0];
       const blob = new Blob(chunks, { type });
-      // 共有はユーザー操作が必要なので、ボタンを「共有待ち」表示にして次のタップで共有
-      pendingShare = { blob, filename: 'topopo.' + (type === 'video/mp4' ? 'mp4' : 'webm') };
-      if (shareVidBtn) { shareVidBtn.innerHTML = ICON_UP; shareVidBtn.classList.add('ready'); }
+      shareOrSave(blob, 'topopo.' + (type === 'video/mp4' ? 'mp4' : 'webm'));
     };
     // 等速回転を制御（録画中は慣性/自動オービットを止める）。
     // 1セット=「ルート再生→ロケット到着→(到達なら)紙吹雪→2秒」。これが収まる整数回転ぶんの長さに。
@@ -605,8 +593,6 @@ export function start(canvas) {
     endGesture = null;
     if (viewBtn) { viewBtn.style.display = 'none'; viewBtn.classList.remove('hot'); }
     if (shareWrap) shareWrap.classList.remove('on'); // 共有ボタンを隠す
-    pendingShare = null;
-    if (shareVidBtn) { shareVidBtn.classList.remove('ready', 'rec'); shareVidBtn.disabled = false; shareVidBtn.innerHTML = ICON_VID; }
     fetchGhosts(runNumber);
     // デイリーは1日1回：保存済みのリザルトがあれば、その結果画面を再生する
     if (daily) {

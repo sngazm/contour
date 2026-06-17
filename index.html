@@ -69,6 +69,9 @@
     #share button:active { transform: scale(0.94); }
     #share button:disabled { opacity: 0.5; }
     #share button.rec { color: #f7f6f2; background: #e0512e; border-color: #e0512e; animation: flagpulse 1s ease-in-out infinite; }
+    /* 録画完了：タップで共有できる合図（緑の脈動） */
+    #share button.ready { color: #2e9e5b; border-color: #2e9e5b; animation: readypulse 1.1s ease-in-out infinite; }
+    @keyframes readypulse { 0%,100% { box-shadow: 0 0 0 0 rgba(46,158,91,0.5); } 50% { box-shadow: 0 0 0 9px rgba(46,158,91,0); } }
   </style>
 </head>
 <body>
