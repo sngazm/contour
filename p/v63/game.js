@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -241,7 +241,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v64'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v63'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -509,9 +509,6 @@ export function start(canvas) {
     recording = { mr, t: 0, dur, turn, routeDur, rktDur, startYaw: cam.yaw };
     if (shareVidBtn) { shareVidBtn.classList.add('rec'); shareVidBtn.disabled = true; }
     if (shareImgBtn) shareImgBtn.disabled = true;
-    // 録画開始前に「録画用の最初のフレーム」を一度描く（ルート未再生・旗/他人なし）。
-    // これをしないと captureStream が直前の完成画面を1フレーム拾ってしまう。
-    renderEnd();
     try { mr.start(); } catch (_) { recording = null; if (shareVidBtn) { shareVidBtn.classList.remove('rec'); shareVidBtn.disabled = false; } if (shareImgBtn) shareImgBtn.disabled = false; shareImage(); }
   }
   if (shareImgBtn) shareImgBtn.addEventListener('click', shareImage);
