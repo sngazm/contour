@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -239,7 +239,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v59'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v58'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -272,17 +272,6 @@ function spawnPickups(terrain, R) {
   for (let i = 0; i < CFG.RADAR_COUNT; i++) place('radar', 'low');
   for (let i = 0; i < CFG.DRINK_COUNT; i++) place('drink', 'high');
   return list;
-}
-
-// レーダーのマーク（同心円＋スイープ）。電池ボタンの表示などに使う。
-function drawRadarMark(ctx, x, y, s, color) {
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 1.5;
-  ctx.lineCap = 'round';
-  for (const rr of [s * 0.5, s]) { ctx.beginPath(); ctx.arc(x, y, rr, 0, TAU); ctx.stroke(); }
-  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + s * 0.72, y - s * 0.72); ctx.stroke();
-  ctx.fillStyle = color;
-  ctx.beginPath(); ctx.arc(x, y, 1.7, 0, TAU); ctx.fill();
 }
 
 // アイテムのアイコン（中心 x,y / 半径 s）。token=外枠の輪も描く。
@@ -420,7 +409,7 @@ export function start(canvas) {
   // 右下の旗ボタン。押すとその場に旗を立てて即終了。最高点付近では強調(.hot)。
   const viewBtn = document.getElementById('viewbtn');
   // リザルトで立てる旗と同じ形（ポール＋右向きの三角ペナント）
-  const ICON_FLAG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21V3"/><path d="M9 4 L20 8.5 L9 13 Z" fill="currentColor" stroke="none"/></svg>';
+  const ICON_FLAG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 21V3"/><path d="M7 4 L18 8.5 L7 13 Z" fill="currentColor" stroke="none"/></svg>';
   if (viewBtn) {
     viewBtn.innerHTML = ICON_FLAG;
     viewBtn.addEventListener('click', () => {
@@ -669,10 +658,7 @@ export function start(canvas) {
     if (game.state !== 'end' || !endPointers.has(e.pointerId)) return;
     endPointers.delete(e.pointerId);
     if (endPointers.size === 0) {
-      if (!recording && endGesture && !endGesture.moved && performance.now() - endGesture.t0 < 350 && game.end.t > 2.2) {
-        // デイリーは1回だけ。終了後のタップは通常の最新版で開始
-        if (game.daily) location.href = '/'; else newGame();
-      }
+      if (!recording && endGesture && !endGesture.moved && performance.now() - endGesture.t0 < 350 && game.end.t > 2.2) newGame();
       else if (endGesture) game.end.cam.yawVel = (endGesture.vyaw || 0) * 16; // フリック慣性
       endGesture = null;
     } else if (endPointers.size === 1) {
@@ -1655,7 +1641,7 @@ export function start(canvas) {
       ctx.beginPath(); ctx.arc(rb.x, rb.y, rb.r, 0, TAU); ctx.fill();
       ctx.strokeStyle = COL.item; ctx.lineWidth = 1.6;
       ctx.beginPath(); ctx.arc(rb.x, rb.y, rb.r, 0, TAU); ctx.stroke();
-      drawRadarMark(ctx, rb.x, rb.y, 10, COL.item); // ボタンはレーダーのマーク（拾うのは電池）
+      drawItemGlyph(ctx, rb.x, rb.y, 'radar', 11, COL.item);
       if (g.radar > 1) {
         ctx.fillStyle = COL.item; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.font = '700 12px ui-monospace, Menlo, monospace';
@@ -1696,15 +1682,6 @@ export function start(canvas) {
       ctx.font = `600 ${Math.round(size * 0.34)}px ui-monospace, "SF Mono", Menlo, monospace`;
       ctx.fillStyle = 'rgba(38,37,31,0.4)';
       ctx.fillText(VERSION, tcx + tw / 2 + 12, ty - size * 0.24);
-      // デイリーチャレンジ時はロゴの下に表示
-      if (g.daily) {
-        ctx.textAlign = 'center';
-        ctx.font = `700 ${Math.round(size * 0.26)}px ui-monospace, "SF Mono", Menlo, monospace`;
-        if ('letterSpacing' in ctx) ctx.letterSpacing = '0.24em';
-        ctx.fillStyle = COL.peak;
-        ctx.fillText('☼ Daily Challenge', cx, ty + size * 0.82);
-        if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
-      }
     }
   }
 
