@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -240,7 +240,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v61'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v60'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -487,7 +487,6 @@ export function start(canvas) {
     // 等速で1回転するよう制御（録画中は慣性/自動オービットを止める）
     const cam = game.end.cam;
     cam.touched = true; cam.yawVel = 0;
-    game.end.confetti = null; // 録画では「ルート→旗→紙吹雪」の順に出すためリセット
     recording = { mr, t: 0, dur: CFG.REC_TURN, startYaw: cam.yaw };
     if (shareVidBtn) { shareVidBtn.classList.add('rec'); shareVidBtn.disabled = true; }
     if (shareImgBtn) shareImgBtn.disabled = true;
@@ -496,23 +495,15 @@ export function start(canvas) {
   if (shareImgBtn) shareImgBtn.addEventListener('click', shareImage);
   if (shareVidBtn) shareVidBtn.addEventListener('click', shareVideo);
 
-  // デイリーチャレンジは同じ端末で1日1回。リザルトをブラウザに保存し、再訪時はそれを再生。
+  // デイリーチャレンジは同じ端末で1日1回まで。挑戦済み判定（JST日付）。
+  const dailyLock = document.getElementById('dailylock');
   const dailyLabel = () => {
     const d = new Date(Date.now() + 9 * 3600 * 1000);
     const p2 = (n) => String(n).padStart(2, '0');
     return d.getUTCFullYear() + '-' + p2(d.getUTCMonth() + 1) + '-' + p2(d.getUTCDate());
   };
-  const loadDailyResult = (label) => {
-    try { const s = JSON.parse(localStorage.getItem('topopo_daily_result') || 'null'); return (s && s.date === label && Array.isArray(s.path) && s.path.length) ? s : null; } catch (_) { return null; }
-  };
-  const saveDailyResult = (g) => {
-    try {
-      const max = 140, step = Math.max(1, Math.ceil(g.path.length / max)), path = [];
-      for (let i = 0; i < g.path.length; i += step) path.push([Math.round(g.path[i].x), Math.round(g.path[i].y), +g.path[i].h.toFixed(3)]);
-      const last = g.path[g.path.length - 1]; path.push([Math.round(last.x), Math.round(last.y), +last.h.toFixed(3)]);
-      localStorage.setItem('topopo_daily_result', JSON.stringify({ date: g.dateLabel, path, best: +g.best.toFixed(4), flagged: !!g.flagged }));
-    } catch (_) {}
-  };
+  const getDailyDone = () => { try { return localStorage.getItem('topopo_daily_done'); } catch (_) { return null; } };
+  const setDailyDone = () => { try { localStorage.setItem('topopo_daily_done', dailyLabel()); } catch (_) {} };
 
   // 紙吹雪の1粒。spread=初期配置（画面内外に散らす）/ false=上から再投入（ループ用）
   const mkConfetti = (spread) => ({
@@ -528,7 +519,14 @@ export function start(canvas) {
 
   function newGame() {
     // デイリーチャレンジ：URLに ?daily が付いていれば、その日の日付をシードに固定
-    const daily = new URLSearchParams(location.search).has('daily');
+    let daily = new URLSearchParams(location.search).has('daily');
+    // デイリーは同じ端末で1日1回だけ。挑戦済みならロック画面を出して通常地形を裏に用意
+    if (daily && getDailyDone() === dailyLabel()) {
+      daily = false;
+      if (dailyLock) dailyLock.classList.add('on');
+    } else if (dailyLock) {
+      dailyLock.classList.remove('on');
+    }
     let runNumber = 1, dateLabel = '';
     if (daily) {
       // JST(UTC+9)の日付を YYYYMMDD の整数に。全員その日は同じ地形・足跡が貯まる
@@ -578,7 +576,6 @@ export function start(canvas) {
       moveDir: { x: 0, y: 0 },
       path: [{ x: 0, y: 0, h: terrain.height(0, 0) }],
       readyPulse: 0,
-      replay: false,        // 保存済みデイリーの再生か（記録はしない）
       end: null,
     };
     input.state.everPressed = false;
@@ -588,19 +585,6 @@ export function start(canvas) {
     if (viewBtn) { viewBtn.style.display = 'none'; viewBtn.classList.remove('hot'); }
     if (shareWrap) shareWrap.classList.remove('on'); // 共有ボタンを隠す
     fetchGhosts(runNumber);
-    // デイリーは1日1回：保存済みのリザルトがあれば、その結果画面を再生する
-    if (daily) {
-      const saved = loadDailyResult(dateLabel);
-      if (saved) {
-        game.path = saved.path.map((p) => ({ x: p[0], y: p[1], h: p[2] }));
-        game.best = saved.best;
-        game.flagged = !!saved.flagged;
-        const last = game.path[game.path.length - 1];
-        game.px = last.x; game.py = last.y;
-        game.replay = true;
-        beginEnd();
-      }
-    }
   }
 
   // 他プレイヤーの足跡を取得（同シード=同じラン番号）。失敗は無視。範囲外データは除外。
@@ -957,9 +941,8 @@ export function start(canvas) {
         // 未操作なら、イントロ後にゆっくり自動オービット
         if (!cam.touched && g.end.t > 3.0) cam.yaw += 0.09 * dt;
       }
-      // 紙吹雪（頂上到達でロケット着地後・録画中も降り続く）。録画中は旗が出てから降らせる
-      const confReady = recording ? (recording.t >= recording.dur * 0.72) : (g.end.t > ROCKET_START + ROCKET_DUR);
-      if (g.end.summit && confReady) {
+      // 紙吹雪（頂上到達でロケット着地後・録画中も降り続く）
+      if (g.end.summit && g.end.t > ROCKET_START + ROCKET_DUR) {
         if (!g.end.confetti) { g.end.confetti = []; for (let i = 0; i < 100; i++) g.end.confetti.push(mkConfetti(true)); }
         for (const c of g.end.confetti) {
           c.y += c.vy * dt;
@@ -977,10 +960,8 @@ export function start(canvas) {
     if (Math.hypot(g.px - last.x, g.py - last.y) > 0.5) {
       g.path.push({ x: g.px, y: g.py, h: g.terrain.height(g.px, g.py) });
     }
-    if (!g.replay) {
-      postRun(); // 自分のランを記録（他プレイヤーの足跡になる）
-      if (g.daily) saveDailyResult(g); // デイリーはリザルトを保存（再訪時に再生）
-    }
+    postRun(); // 自分のランを記録（他プレイヤーの足跡になる）
+    if (g.daily) setDailyDone(); // デイリーは1日1回（この端末では挑戦済みに）
     // 軌跡の範囲＋余白で俯瞰領域を決める
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const p of g.path) {
@@ -1735,55 +1716,26 @@ export function start(canvas) {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       const size = Math.min(W, H) * 0.085;
-      const circleTop = cy - R;
-      // デイリーのバッジ寸法を先に測る（ロゴと積んで円の上に収める）
-      let badge = null;
-      if (g.daily) {
-        const fb = Math.round(size * 0.26);
-        ctx.font = `700 ${fb}px ui-monospace, "SF Mono", Menlo, monospace`;
-        if ('letterSpacing' in ctx) ctx.letterSpacing = '0.2em';
-        const label = '☼ Daily Challenge';
-        const tw = ctx.measureText(label).width;
-        if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
-        badge = { fb, label, w: tw + 28, h: fb + 16 };
-      }
-      // ロゴ位置：デイリー時はバッジぶん上に積んで、円形と被らないようにする
-      let logoY;
-      if (badge) {
-        const gap = 12;
-        const blockH = size + gap + badge.h;
-        const blockTop = Math.max(10, circleTop - 16 - blockH);
-        logoY = blockTop + size / 2;
-        badge.yc = blockTop + size + gap + badge.h / 2;
-      } else {
-        logoY = Math.max(size, circleTop - size * 0.7);
-      }
-      // ロゴ
-      ctx.textAlign = 'center';
+      const ty = Math.max(size, cy - R - size * 0.7);
       ctx.font = `700 ${size}px ui-monospace, "SF Mono", Menlo, monospace`;
       if ('letterSpacing' in ctx) ctx.letterSpacing = '0.28em';
       ctx.fillStyle = 'rgba(38,37,31,0.88)';
       const tcx = cx + size * 0.14;
-      ctx.fillText('TOPOPO', tcx, logoY);
-      const tw = ctx.measureText('TOPOPO').width;
+      ctx.fillText('TOPOPO', tcx, ty);
+      const tw = ctx.measureText('TOPOPO').width; // 文字間隔込みの実幅
       if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
-      // タイトル脇にバージョン番号
+      // タイトル脇にバージョン番号（実幅から右に余白を空ける）
       ctx.textAlign = 'left';
       ctx.font = `600 ${Math.round(size * 0.34)}px ui-monospace, "SF Mono", Menlo, monospace`;
       ctx.fillStyle = 'rgba(38,37,31,0.4)';
-      ctx.fillText(VERSION, tcx + tw / 2 + 12, logoY - size * 0.24);
-      // デイリーチャレンジのバッジ（四角い枠線で囲む・円形には被らない）
-      if (badge) {
-        const bx0 = cx - badge.w / 2, by0 = badge.yc - badge.h / 2;
-        ctx.fillStyle = 'rgba(247,246,242,0.72)';
-        ctx.fillRect(bx0, by0, badge.w, badge.h);
-        ctx.strokeStyle = COL.peak; ctx.lineWidth = 1.5;
-        ctx.strokeRect(bx0, by0, badge.w, badge.h);
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.font = `700 ${badge.fb}px ui-monospace, "SF Mono", Menlo, monospace`;
-        if ('letterSpacing' in ctx) ctx.letterSpacing = '0.2em';
+      ctx.fillText(VERSION, tcx + tw / 2 + 12, ty - size * 0.24);
+      // デイリーチャレンジ時はロゴの下に表示
+      if (g.daily) {
+        ctx.textAlign = 'center';
+        ctx.font = `700 ${Math.round(size * 0.26)}px ui-monospace, "SF Mono", Menlo, monospace`;
+        if ('letterSpacing' in ctx) ctx.letterSpacing = '0.24em';
         ctx.fillStyle = COL.peak;
-        ctx.fillText(badge.label, cx, badge.yc);
+        ctx.fillText('☼ Daily Challenge', cx, ty + size * 0.82);
         if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
       }
     }
@@ -2036,35 +1988,32 @@ export function start(canvas) {
     ctx.arc(spr.sx, spr.sy, 7, 0, TAU);
     ctx.stroke();
 
-    // 到達地点: 高さを示す縦線 + 脈打つ点（録画中はルート再生が終わってから出す）
+    // 到達地点: 高さを示す縦線 + 脈打つ点
     const epr = project(ep.x, ep.y, ep.h);
     const base = project(ep.x, ep.y, e.gmin);
-    const showEnd = !recording || recording.t >= recording.dur * 0.7;
-    if (showEnd) {
-      ctx.strokeStyle = 'rgba(224,81,46,0.45)';
-      ctx.setLineDash([4, 5]);
-      ctx.lineWidth = 1.5;
+    ctx.strokeStyle = 'rgba(224,81,46,0.45)';
+    ctx.setLineDash([4, 5]);
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(base.sx, base.sy);
+    ctx.lineTo(epr.sx, epr.sy);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (g.flagged) {
+      // 立てた旗
+      const px = epr.sx, py = epr.sy, ph = 24;
+      ctx.strokeStyle = '#26251f'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, py - ph); ctx.stroke();
+      ctx.fillStyle = COL.accent;
+      ctx.beginPath(); ctx.moveTo(px, py - ph); ctx.lineTo(px + 16, py - ph + 6); ctx.lineTo(px, py - ph + 12); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#26251f';
+      ctx.beginPath(); ctx.arc(px, py, 3, 0, TAU); ctx.fill();
+    } else {
+      const pulse = 1 + 0.22 * Math.sin(e.t * 5);
+      ctx.fillStyle = COL.accent;
       ctx.beginPath();
-      ctx.moveTo(base.sx, base.sy);
-      ctx.lineTo(epr.sx, epr.sy);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      if (g.flagged) {
-        // 立てた旗
-        const px = epr.sx, py = epr.sy, ph = 24;
-        ctx.strokeStyle = '#26251f'; ctx.lineWidth = 2; ctx.lineCap = 'round';
-        ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, py - ph); ctx.stroke();
-        ctx.fillStyle = COL.accent;
-        ctx.beginPath(); ctx.moveTo(px, py - ph); ctx.lineTo(px + 16, py - ph + 6); ctx.lineTo(px, py - ph + 12); ctx.closePath(); ctx.fill();
-        ctx.fillStyle = '#26251f';
-        ctx.beginPath(); ctx.arc(px, py, 3, 0, TAU); ctx.fill();
-      } else {
-        const pulse = 1 + 0.22 * Math.sin(e.t * 5);
-        ctx.fillStyle = COL.accent;
-        ctx.beginPath();
-        ctx.arc(epr.sx, epr.sy, 7 * pulse, 0, TAU);
-        ctx.fill();
-      }
+      ctx.arc(epr.sx, epr.sy, 7 * pulse, 0, TAU);
+      ctx.fill();
     }
 
     // 取得地点（レーダー/ボーナス）と、レーダーを使った地点
@@ -2179,7 +2128,6 @@ export function start(canvas) {
 
   // ---- ループ --------------------------------------------------------------
   let prev = performance.now();
-  let bodyTitle = null, bodyDaily = null;
   function frame(now) {
     let dt = (now - prev) / 1000;
     prev = now;
@@ -2187,11 +2135,6 @@ export function start(canvas) {
     update(dt);
     if (game.state === 'end') renderEnd();
     else renderPlay();
-    // タイトル画面のリンク類（versions/story/daily）は ready のときだけ表示
-    const isTitle = game.state === 'ready';
-    if (isTitle !== bodyTitle) { bodyTitle = isTitle; document.body.classList.toggle('titlescreen', isTitle); }
-    const isDaily = !!game.daily;
-    if (isDaily !== bodyDaily) { bodyDaily = isDaily; document.body.classList.toggle('dailymode', isDaily); }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
