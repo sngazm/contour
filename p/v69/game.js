@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -241,7 +241,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v70'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v69'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -679,12 +679,11 @@ export function start(canvas) {
     const R0 = Math.min(W, H) * 0.46;
     const playerH = game.terrain.height(game.px, game.py);
     const hi = clamp((playerH / Math.max(0.25, game.field.max.h) - CFG.HIGH_VIEW_FROM) / (CFG.HIGH_VIEW_TO - CFG.HIGH_VIEW_FROM), 0, 1);
+    const R = lerp(R0, Math.hypot(W, H) * 0.5, hi);
     const ppu0 = R0 / CFG.VIEW_RADIUS_WORLD;
     const blend = clamp((game.viewR - CFG.VIEW_RADIUS_WORLD) / (CFG.ZOOM_MAX_R - CFG.VIEW_RADIUS_WORLD), 0, 1);
-    const Rhi = lerp(R0, Math.hypot(W, H) * 0.5, hi);
-    const R = lerp(Rhi, R0, blend); // レーダー時は既定の円に縮小（renderPlayと一致）
     const camx = lerp(game.px, 0, blend), camy = lerp(game.py, 0, blend);
-    const frameR = lerp(Rhi / ppu0, CFG.FIELD_R * 1.07, blend);
+    const frameR = lerp(R / ppu0, CFG.FIELD_R * 1.07, blend);
     const ppu = R / frameR;
     return { x: camx + (sx - cx) / ppu, y: camy + (sy - cy) / ppu };
   }
@@ -1255,13 +1254,12 @@ export function start(canvas) {
     const hN = clamp(playerH / Math.max(0.25, g.field.max.h * 0.85), 0, 1);
     // 高所(全体の50%以上)では、ズームは変えず「円形の外枠(レンズ)自体」を広げて見晴らしUP（70%で全開）
     const hi = clamp((playerH / Math.max(0.25, g.field.max.h) - CFG.HIGH_VIEW_FROM) / (CFG.HIGH_VIEW_TO - CFG.HIGH_VIEW_FROM), 0, 1);
+    const R = lerp(R0, Math.hypot(W, H) * 0.5, hi); // 高所でレンズが画面いっぱいまで拡大
     const NORMAL = CFG.VIEW_RADIUS_WORLD;      // 倍率(縮尺)は一定
     const ppu0 = R0 / NORMAL;                   // 通常の固定倍率（レンズが広がっても地形の大きさは不変）
     const blend = clamp((g.viewR - CFG.VIEW_RADIUS_WORLD) / (CFG.ZOOM_MAX_R - CFG.VIEW_RADIUS_WORLD), 0, 1);
-    const Rhi = lerp(R0, Math.hypot(W, H) * 0.5, hi); // 高所で広がる通常レンズ
-    const R = lerp(Rhi, R0, blend);             // レーダー(引き)時は見晴らしに関わらず既定の円に縮小
     const camx = lerp(g.px, 0, blend), camy = lerp(g.py, 0, blend);
-    const frameRNormal = Rhi / ppu0;            // 通常：レンズ半径に応じて世界を多く見せる（倍率一定）
+    const frameRNormal = R / ppu0;             // 通常：レンズ半径に応じて世界を多く見せる（倍率一定）
     const frameR = lerp(frameRNormal, CFG.FIELD_R * 1.07, blend); // レーダーは全域
     // レーダーは高所ほど遠くまで届く（低い所では狭い）
     const farSight = lerp(CFG.RADAR_MIN, 2 * CFG.FIELD_R, hN);
