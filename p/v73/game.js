@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -241,7 +241,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v74'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v73'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -1833,8 +1833,7 @@ export function start(canvas) {
       ctx.textAlign = 'left';
       ctx.font = `600 ${Math.round(size * 0.34)}px ui-monospace, "SF Mono", Menlo, monospace`;
       ctx.fillStyle = 'rgba(38,37,31,0.4)';
-      // 末尾Oの右 ~10px に寄せる（measureText は末尾の字間も含むので1字間ぶん戻す）
-      ctx.fillText(VERSION, tcx + tw / 2 - size * 0.28 + 10, logoY - size * 0.2);
+      ctx.fillText(VERSION, tcx + tw / 2 + 12, logoY - size * 0.24);
       // デイリーチャレンジのバッジ（四角い枠線で囲む・円形には被らない）
       if (badge) {
         const bx0 = cx - badge.w / 2, by0 = badge.yc - badge.h / 2;
