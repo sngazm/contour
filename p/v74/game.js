@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -241,7 +241,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v75'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v74'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -1537,31 +1537,6 @@ export function start(canvas) {
       ctx.moveTo(9, 0); ctx.lineTo(-5, 6); ctx.lineTo(-5, -6); ctx.closePath();
       ctx.fill(); ctx.stroke();
       ctx.restore();
-    }
-
-    // 他プレイヤーの最終到達地点（小さなグレーの旗＋手前のルートを少しだけ）。視界内のみ表示。
-    if (!radarView && g.ghosts) {
-      for (const gh of g.ghosts) {
-        const pa = gh.path; if (!pa || !pa.length) continue;
-        const lp = pa[pa.length - 1];
-        if (!visibleAt(lp[0], lp[1])) continue;
-        // たどり着くまでの経路を少しだけ（最後の数点）グレーの線で
-        const startI = Math.max(0, pa.length - 12);
-        ctx.strokeStyle = 'rgba(70,66,58,0.26)';
-        ctx.lineWidth = 1.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-        ctx.beginPath();
-        for (let i = startI; i < pa.length; i++) {
-          const tx = wsx(pa[i][0]), ty = wsy(pa[i][1]);
-          if (i === startI) ctx.moveTo(tx, ty); else ctx.lineTo(tx, ty);
-        }
-        ctx.stroke();
-        // 小さなグレーの旗
-        const fx = wsx(lp[0]), fy = wsy(lp[1]);
-        ctx.strokeStyle = 'rgba(70,66,58,0.6)'; ctx.lineWidth = 1.4; ctx.lineCap = 'round';
-        ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(fx, fy - 11); ctx.stroke();
-        ctx.fillStyle = 'rgba(70,66,58,0.6)';
-        ctx.beginPath(); ctx.moveTo(fx, fy - 11); ctx.lineTo(fx + 7, fy - 8.5); ctx.lineTo(fx, fy - 6); ctx.closePath(); ctx.fill();
-      }
     }
 
     // NPC（視界内）。プレイヤーを追っている個体はアクセントで警告
