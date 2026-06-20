@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -47,8 +47,8 @@ const CFG = {
   ZIP_SPEED: 300,         // ジップライン移動の等速(ワールド単位/秒)
   ZIP_ARRIVE: 6,          // 到着判定の距離
   SLOPE_AVG_DIST: 45,     // 速度を決める傾斜の平均距離(進行方向の±これ)
-  CLIMB_MAX: 0.0040,      // 登り：これより急だと登れず滑り落ちる（崖）
-  DOWN_FALL_K: 0.0042,    // 下り/横：steep×入力の強さ がこれを超えると踏み外す（そろり下れば安全）
+  FALL_SLOPE: 0.0034,     // これより急で「登っていない」と滑り落ちる
+  CLIMB_MAX: 0.0040,      // これより急だと押していても登れず転落（登りでも落ちやすめ）
   TREMBLE_FROM: 0.62,     // 転落しきい値の何割で震え始めるか
   FALL_RECOVER: 0.0022,   // これより緩くなれば踏ん張りを取り戻す
   FALL_ACCEL: 220000,     // 転落の加速(傾斜に比例)
@@ -241,7 +241,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v76'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v75'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -793,6 +793,7 @@ export function start(canvas) {
       else if (g.lastAlt !== undefined && altNow < g.lastAlt) { g.rec = false; } // 数値が下がった瞬間に黒へ
       g.lastAlt = altNow;
       if (g.flash > 0) g.flash -= dt;
+      if (g.grace > 0) g.grace -= dt;
       for (const fl of g.radarFlies) fl.t += dt / 0.5; // 0.5秒で着地
       if (g.radarFlies.some((f) => f.t >= 1)) g.radarFlies = g.radarFlies.filter((f) => f.t < 1);
       let moved = false;
@@ -844,20 +845,18 @@ export function start(canvas) {
       } else if (g.recoverShake > 0) {
         // 黒に戻ってブルっと震える。終わったら操作可能（ハメ防止の無敵猶予つき）
         g.recoverShake -= dt;
-        if (g.recoverShake <= 0) g.recoverShake = 0; // 復帰（敵なしのため無敵猶予graceは廃止）
+        if (g.recoverShake <= 0) { g.recoverShake = 0; g.grace = CFG.PUSH_GRACE; }
       } else {
         const mv = input.read();
-        // 転落判定（新ロジック）：
-        //  ・登り＝入力が強くても転けない。急すぎて登れない崖(steep>CLIMB_MAX)だけ滑り落ちる。
-        //  ・下り/横/その場＝「急斜面 × 入力の強さ」が大きいと踏み外す（=そろり下れば安全）。
+        // 転落判定：急すぎる／急斜面で登っていない なら転がり落ちる
         g.terrain.gradient(g.px, g.py, grad);
         const steep = Math.hypot(grad.x, grad.y);
-        const ds = grad.x * mv.x + grad.y * mv.y;        // +上り −下り（進行方向の傾斜）
-        const goingUp = mv.mag > 0.12 && ds > 0;
-        const danger = goingUp ? steep / CFG.CLIMB_MAX   // 崖は登れず滑り落ちる
-                               : steep * mv.mag / CFG.DOWN_FALL_K; // 勢いよく下る/横切るほど危険
-        g.tremble = clamp((danger - CFG.TREMBLE_FROM) / (1 - CFG.TREMBLE_FROM), 0, 1);
-        if (danger > 1) {
+        const fallS = CFG.FALL_SLOPE, climbMax = CFG.CLIMB_MAX;
+        const climbing = mv.mag > 0.25 && (grad.x * mv.x + grad.y * mv.y) > 0; // 上りへ踏ん張る
+        // 転落しきい値への近さ＝震え（登り中は climbMax、それ以外は fallS が基準）
+        const thr = climbing ? climbMax : fallS;
+        g.tremble = clamp((steep - thr * CFG.TREMBLE_FROM) / (thr * (1 - CFG.TREMBLE_FROM)), 0, 1);
+        if (steep > climbMax || (steep > fallS && !climbing)) {
           // 転落開始：ダメージは着地時に「落ちた高さ」に応じて発生。滑った地点をリザルト用に記録
           g.fall = { vx: 0, vy: 0, t: 0, h0: g.terrain.height(g.px, g.py) };
           g.marks.push({ x: g.px, y: g.py, h: g.terrain.height(g.px, g.py), type: 'fall', pi: g.path.length });
