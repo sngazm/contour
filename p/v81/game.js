@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -239,7 +239,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v82'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v81'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -1049,14 +1049,11 @@ export function start(canvas) {
     const CX = 120, RY = 120;
     const heights = new Float32Array(CX * RY);
     let gmin = Infinity, gmax = -Infinity;
-    const FIELD = CFG.FIELD_R, FADE = 160; // 円形フィールドの外は外側ほど高さを下げる（高所が現れない）
     for (let r = 0; r < RY; r++) {
       for (let c = 0; c < CX; c++) {
         const wx = cx - half + (2 * half) * (c / (CX - 1));
         const wy = cy - half + (2 * half) * (r / (RY - 1));
-        let h = g.terrain.height(wx, wy);
-        const d = Math.hypot(wx, wy);
-        if (d > FIELD) h *= clamp(1 - (d - FIELD) / FADE, 0, 1); // 円外はフェードで沈める
+        const h = g.terrain.height(wx, wy);
         heights[r * CX + c] = h;
         if (h < gmin) gmin = h;
         if (h > gmax) gmax = h;
