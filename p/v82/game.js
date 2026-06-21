@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -239,7 +239,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v83'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v82'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -1049,19 +1049,14 @@ export function start(canvas) {
     const CX = 120, RY = 120;
     const heights = new Float32Array(CX * RY);
     let gmin = Infinity, gmax = -Infinity;
-    // 円形フィールドの外は地形を切り取らず自然に続けるが、頂上より高い峰が外に出ないよう
-    // 「頂上付近の高さだけ」をなだらかに圧縮する（低地・中腹はそのまま＝見た目は従来通り）。
-    const FIELD = CFG.FIELD_R, capH = g.field.max.h * 0.9;
+    const FIELD = CFG.FIELD_R, FADE = 160; // 円形フィールドの外は外側ほど高さを下げる（高所が現れない）
     for (let r = 0; r < RY; r++) {
       for (let c = 0; c < CX; c++) {
         const wx = cx - half + (2 * half) * (c / (CX - 1));
         const wy = cy - half + (2 * half) * (r / (RY - 1));
         let h = g.terrain.height(wx, wy);
         const d = Math.hypot(wx, wy);
-        if (d > FIELD && h > capH) {
-          const t = clamp((d - FIELD) / 220, 0, 1);   // 境界では効かず、外ほど強く圧縮
-          h = capH + (h - capH) * (1 - 0.9 * t);       // 頂上(capHより上)だけを沈める
-        }
+        if (d > FIELD) h *= clamp(1 - (d - FIELD) / FADE, 0, 1); // 円外はフェードで沈める
         heights[r * CX + c] = h;
         if (h < gmin) gmin = h;
         if (h > gmax) gmax = h;
