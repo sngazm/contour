@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -41,7 +41,6 @@ const CFG = {
   RADAR_COUNT: 5,         // レーダー（谷に多い）
   DRINK_COUNT: 5,         // ドリンク缶（体力回復・満遍なく）
   PICKUP_R: 30,           // アイテム取得の距離
-  PICKUP_MIN_DIST: 360,   // アイテム同士の最小間隔（近接で簡単になりすぎないよう離す）
   GLOVE_K_MUL: 0.34,      // グローブ装備時の登坂ペナルティ倍率
   GLOVE_MIN: 0.6,         // グローブ装備時の最低速度係数(急崖でも登れる)
   GLOVE_MAX: 1.12,        // グローブ装備時の最高速度(下りが軽快でなくなる=不便)
@@ -240,7 +239,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v87'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v86'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -263,27 +262,18 @@ const ROCKET_START = 3.2, ROCKET_DUR = 1.8; // リザルトの救助ロケット
 const CONFETTI_COLORS = ['#e0512e', '#c8920a', '#2a7fd0', '#1f8a8a', '#e8e6df', '#f0c020']; // 紙吹雪
 
 // 散布。バッテリー(レーダー)は低地に、酸素ボンベ(ドリンク)は高地に寄せる。
-// シード固定の乱数で配置（同じシード=同じ地形なら全員アイテム位置も同じ）。
-// さらにアイテム同士は一定距離を空ける（近くに固まると簡単になりすぎるため）。
+// シード固定の乱数で配置するので、同じシード(=同じ地形)なら全員アイテム位置も同じ。
 function spawnPickups(terrain, R, seed) {
   const list = [];
   const rng = makeRng(((seed >>> 0) * 2654435761 + 12345) >>> 0);
   const rnd = () => { const a = rng() * TAU, rr = 240 + rng() * (R - 300); return { x: Math.cos(a) * rr, y: Math.sin(a) * rr }; };
-  const MIN2 = CFG.PICKUP_MIN_DIST * CFG.PICKUP_MIN_DIST;
-  const minDist2 = (p) => { let m = Infinity; for (const q of list) { const dx = p.x - q.x, dy = p.y - q.y; const d = dx * dx + dy * dy; if (d < m) m = d; } return m; };
   const place = (type, mode) => {
-    let best = null, bestScore = mode === 'low' ? Infinity : -Infinity;
-    let fallback = null, fbDist = -1; // 距離条件を満たせない時は最も離れた候補に
-    for (let k = 0; k < 40; k++) {
-      const p = rnd();
-      const md = list.length ? minDist2(p) : Infinity;
-      if (md > fbDist) { fbDist = md; fallback = p; }
-      if (md < MIN2) continue;                       // 近すぎる候補は除外
-      const s = terrain.height(p.x, p.y);
-      if (mode === 'low' ? s < bestScore : s > bestScore) { bestScore = s; best = p; }
+    let best = rnd();
+    if (mode !== 'any') {
+      let bs = mode === 'low' ? Infinity : -Infinity;
+      for (let k = 0; k < 12; k++) { const p = rnd(); const s = terrain.height(p.x, p.y); if (mode === 'low' ? s < bs : s > bs) { bs = s; best = p; } }
     }
-    const pick = best || fallback;
-    list.push({ x: pick.x, y: pick.y, type, taken: false });
+    list.push({ x: best.x, y: best.y, type, taken: false });
   };
   for (let i = 0; i < CFG.RADAR_COUNT; i++) place('radar', 'low');
   for (let i = 0; i < CFG.DRINK_COUNT; i++) place('drink', 'high');
@@ -2226,8 +2216,8 @@ export function start(canvas) {
     const headH = g.path.length ? g.path[headIdx].h : ep.h;
     drawHud(headH, g.field.max.h, g.best, 0, glow);
 
-    // 登頂成功数 / 総プレイヤー数。ロケット到着後に表示。デイリーのみ日付も。シード番号は出さない
-    if (glowOn) {
+    // 登頂成功数 / 総プレイヤー数。デイリーのみ日付も。シード番号は出さない
+    {
       const maxAlt = altOf(g.field.max.h), tol = Math.round(CFG.SUMMIT_TOL * 1000);
       let success = e.summit ? 1 : 0;
       if (g.ghosts) for (const gh of g.ghosts) if (gh.best != null && gh.best >= maxAlt - tol) success++;
