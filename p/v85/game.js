@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -239,7 +239,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v86'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v85'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -1116,13 +1116,14 @@ export function start(canvas) {
     // WebGL 用メッシュをアップロード（頂点= worldX,worldY,height,rv / 三角形インデックス）
     if (glR) {
       const verts = new Float32Array(CX * RY * 4);
+      const inF = new Uint8Array(CX * RY); // フィールド円内の頂点か（円形に切り落とすため）
       for (let r = 0; r < RY; r++) {
         for (let c = 0; c < CX; c++) {
           const i = r * CX + c, o = i * 4;
-          verts[o] = cx - half + (2 * half) * (c / (CX - 1));
-          verts[o + 1] = cy - half + (2 * half) * (r / (RY - 1));
-          verts[o + 2] = heights[i];
-          verts[o + 3] = rv[i];
+          const wx = cx - half + (2 * half) * (c / (CX - 1));
+          const wy = cy - half + (2 * half) * (r / (RY - 1));
+          verts[o] = wx; verts[o + 1] = wy; verts[o + 2] = heights[i]; verts[o + 3] = rv[i];
+          inF[i] = (wx * wx + wy * wy <= FIELD2) ? 1 : 0;
         }
       }
       const idx = new Uint16Array((CX - 1) * (RY - 1) * 6);
@@ -1130,15 +1131,16 @@ export function start(canvas) {
       for (let r = 0; r + 1 < RY; r++) {
         for (let c = 0; c + 1 < CX; c++) {
           const a = r * CX + c, b = a + 1, d = (r + 1) * CX + c, e2 = d + 1;
-          idx[p++] = a; idx[p++] = d; idx[p++] = b;
-          idx[p++] = b; idx[p++] = d; idx[p++] = e2;
+          // 円形マップに切り落とす：全頂点が円内の三角形だけ描く
+          if (inF[a] && inF[b] && inF[d]) { idx[p++] = a; idx[p++] = d; idx[p++] = b; }
+          if (inF[b] && inF[d] && inF[e2]) { idx[p++] = b; idx[p++] = d; idx[p++] = e2; }
         }
       }
       gl.bindBuffer(gl.ARRAY_BUFFER, glR.vbo);
       gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, glR.ibo);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
-      g.end.glCount = idx.length;
+      g.end.glCount = p;
 
       // 経路：各区間を「自点/相手点/左右」で持つ。幅はシェーダーがスクリーン空間で付ける
       // bias=地面から少し浮かせる量（食い込み防止）
@@ -1971,7 +1973,7 @@ export function start(canvas) {
       const ownProg = ownReveal;
       const ghostProg = ghostReveal;
       gl.depthMask(false);
-      if (!recording && e.ghostBuilt) drawTube(glR.gpbo, e.gpCount, glR.gdbo, e.gdCount, ghostProg, 0.85, [0.58, 0.56, 0.52]);
+      if (!recording && e.ghostBuilt) drawTube(glR.gpbo, e.gpCount, glR.gdbo, e.gdCount, ghostProg, 1.1, [0.58, 0.56, 0.52]);
       drawTube(glR.pbo, e.glPathCount, glR.dbo, e.glDiscCount, ownProg, 2.3, [0.88, 0.32, 0.18]);
       gl.depthMask(true);
     }
@@ -2003,9 +2005,13 @@ export function start(canvas) {
         }
       }
       const cells = [];
+      const FIELD2f = CFG.FIELD_R * CFG.FIELD_R;
       for (let r = 0; r + 1 < RYr; r++) {
         for (let c = 0; c + 1 < CXr; c++) {
           const k = r * CXr + c;
+          const wxc = cx - half + (2 * half) * ((c + 0.5) / (CXr - 1));
+          const wyc = cy - half + (2 * half) * ((r + 0.5) / (RYr - 1));
+          if (wxc * wxc + wyc * wyc > FIELD2f) continue; // 円外は描かない（円形に切り落とす）
           cells.push([(fillPD[k] + fillPD[k + 1] + fillPD[(r + 1) * CXr + c] + fillPD[(r + 1) * CXr + c + 1]) * 0.25, k, r, c]);
         }
       }
@@ -2226,26 +2232,23 @@ export function start(canvas) {
       ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
       ctx.font = '600 13px ui-monospace, "SF Mono", Menlo, monospace';
       if (g.daily) { ctx.fillStyle = 'rgba(40,39,35,0.5)'; ctx.fillText('☼ ' + g.dateLabel, bx, by); by += 18; }
-      // 小さなロケット（リザルトのロケットと同じ配色を簡略化：白い機体＋朱フィン＋青窓）
+      // 小さなロケット（登頂＝金）＋ success/total ＋ 人アイコン
       const rx = bx + 5;
-      ctx.fillStyle = '#eef2f4'; ctx.strokeStyle = 'rgba(40,39,35,0.55)'; ctx.lineWidth = 1;
+      ctx.fillStyle = COL.peak;
       ctx.beginPath();
       ctx.moveTo(rx - 3, by + 4); ctx.lineTo(rx - 3, by - 2);
       ctx.quadraticCurveTo(rx - 3, by - 7, rx, by - 7);
       ctx.quadraticCurveTo(rx + 3, by - 7, rx + 3, by - 2);
-      ctx.lineTo(rx + 3, by + 4); ctx.closePath(); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = COL.accent; // フィン
-      ctx.beginPath();
+      ctx.lineTo(rx + 3, by + 4); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); // フィン
       ctx.moveTo(rx - 3, by + 1); ctx.lineTo(rx - 5.5, by + 4); ctx.lineTo(rx - 3, by + 4); ctx.closePath();
       ctx.moveTo(rx + 3, by + 1); ctx.lineTo(rx + 5.5, by + 4); ctx.lineTo(rx + 3, by + 4); ctx.closePath();
       ctx.fill();
-      ctx.fillStyle = '#2a7fd0'; ctx.beginPath(); ctx.arc(rx, by - 2.5, 1.4, 0, TAU); ctx.fill(); // 窓
-      // success/total ＋ 人アイコン（元のスタイル）
-      ctx.fillStyle = 'rgba(40,39,35,0.5)';
+      ctx.fillStyle = 'rgba(40,39,35,0.62)';
       const label = success + '/' + total;
       ctx.fillText(label, rx + 12, by);
       const tw = ctx.measureText(label).width;
-      const hx = rx + 12 + tw + 10, hy = by;
+      const hx = rx + 12 + tw + 10, hy = by; // 人アイコン
       ctx.beginPath(); ctx.arc(hx, hy - 4, 2.6, 0, TAU); ctx.fill();
       ctx.beginPath(); ctx.moveTo(hx - 4, hy + 4); ctx.quadraticCurveTo(hx, hy - 2, hx + 4, hy + 4); ctx.closePath(); ctx.fill();
     }
