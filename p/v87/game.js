@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -97,7 +97,6 @@ uniform vec3 uC0, uC1, uC2, uC3, uC4;
 uniform vec4 uTH;
 uniform float uShadeLo, uShadeHi, uRvScale, uStep;
 void main(){
-  if (!gl_FrontFacing) { frag = vec4(1.0, 1.0, 1.0, 1.0); return; } // 地形の裏面は真っ白
   float h = vH;
   float w = fwidth(h);
   vec3 c = uC0;
@@ -241,7 +240,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v88'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v87'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -2251,19 +2250,14 @@ export function start(canvas) {
       ctx.moveTo(rx + 3, by + 1); ctx.lineTo(rx + 5.5, by + 4); ctx.lineTo(rx + 3, by + 4); ctx.closePath();
       ctx.fill();
       ctx.fillStyle = '#2a7fd0'; ctx.beginPath(); ctx.arc(rx, by - 2.5, 1.4, 0, TAU); ctx.fill(); // 窓
-      // 登頂数（金）/ 総数（ink）＋ 人アイコン
-      const tx = rx + 12;
-      ctx.fillStyle = COL.peak; // 登頂者数は最高点(▲)と同じ金色
-      ctx.fillText(String(success), tx, by);
-      const sw = ctx.measureText(String(success)).width;
+      // success/total ＋ 人アイコン（元のスタイル）
       ctx.fillStyle = 'rgba(40,39,35,0.5)';
-      const rest = '/' + total;
-      ctx.fillText(rest, tx + sw, by);
-      const tw = sw + ctx.measureText(rest).width;
-      // 人アイコン（頭と体をくっつける）
-      const hx = tx + tw + 11, hy = by;
-      ctx.beginPath(); ctx.arc(hx, hy - 2.5, 2.8, 0, TAU); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(hx - 4.5, hy + 4); ctx.quadraticCurveTo(hx, hy - 3, hx + 4.5, hy + 4); ctx.closePath(); ctx.fill();
+      const label = success + '/' + total;
+      ctx.fillText(label, rx + 12, by);
+      const tw = ctx.measureText(label).width;
+      const hx = rx + 12 + tw + 10, hy = by;
+      ctx.beginPath(); ctx.arc(hx, hy - 4, 2.6, 0, TAU); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(hx - 4, hy + 4); ctx.quadraticCurveTo(hx, hy - 2, hx + 4, hy + 4); ctx.closePath(); ctx.fill();
     }
 
     // 再挑戦を促す微かなパルス（イントロ後・言葉なし）。録画中は消す
