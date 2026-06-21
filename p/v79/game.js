@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -67,6 +67,8 @@ const CFG = {
   NPC_LOOK_R: 320,        // NPCが登り目標を探す範囲(広い範囲で登る)
   NPC_DOWN: 6,            // 撃破されたNPCの放心秒数(消えずに復帰)
 };
+
+const RV_BLUR = 12; // 尾根谷度の近傍半径(セル数。広いほどマダラが減る)
 // 高度カラー(5色): 下から 黄土(砂地)→黄緑→緑→ブルーグレー(高山の岩場)→白。しきいは高さ0..1。
 const ALT_C = [[198, 172, 116], [156, 176, 92], [86, 138, 74], [124, 142, 156], [238, 238, 232]];
 const ALT_TH = [0.10, 0.18, 0.30, 0.46];
@@ -239,7 +241,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v80'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v79'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -398,7 +400,10 @@ export function start(canvas) {
 
   const input = createInput(canvas);
   const GRID_CAP = 224;                    // 格子バッファの最大辺（高所でレンズ拡大時も世界固定セルを保つため余裕を持たせる）
-  const grid = new Float32Array(GRID_CAP * GRID_CAP); // ワールド固定格子の作業領域（等高線/塗り）
+  const grid = new Float32Array(GRID_CAP * GRID_CAP); // ワールド固定格子の作業領域
+  const gridB = new Float32Array(GRID_CAP * GRID_CAP); // ぼかし
+  const gridT = new Float32Array(GRID_CAP * GRID_CAP); // ぼかし作業用
+  const gridRV = new Float32Array(GRID_CAP * GRID_CAP); // 尾根谷度
   const grad = { x: 0, y: 0 };
   const shadeCanvas = document.createElement('canvas'); // 段彩/立体図用オフスクリーン
   const shadeCtx = shadeCanvas.getContext('2d');
@@ -1302,8 +1307,17 @@ export function start(canvas) {
     const wsx = (wx) => cx + (wx - camx) * ppu; // ワールド→画面
     const wsy = (wy) => cy + (wy - camy) * ppu;
 
-    // 高度カラー(5色段彩)で塗る。※尾根谷度の陰影は廃止（毎フレームのぼかし計算もなし）
+    // 高度カラー(青→緑→黄土→白)に、尾根谷度の陰影(谷=暗/尾根=明)を重ねる。
     const drawTint = () => {
+      boxBlur(grid, nx, ny, RV_BLUR, gridT, gridB);
+      let maxAbs = 1e-4;
+      for (let k = 0; k < nx * ny; k++) {
+        const rv = grid[k] - gridB[k];
+        gridRV[k] = rv;
+        const a = rv < 0 ? -rv : rv;
+        if (a > maxAbs) maxAbs = a;
+      }
+      const scale = 0.5 / Math.max(maxAbs, 0.02);
       const M = clamp(Math.round(2 * R), 96, 360);
       shadeCanvas.width = M; shadeCanvas.height = M;
       const img = shadeCtx.createImageData(M, M);
@@ -1317,9 +1331,15 @@ export function start(canvas) {
           const w00 = (1 - fi) * (1 - fj), w10 = fi * (1 - fj), w01 = (1 - fi) * fj, w11 = fi * fj;
           const k00 = j * nx + i, k10 = j * nx + i2, k01 = j2 * nx + i, k11 = j2 * nx + i2;
           const h = grid[k00] * w00 + grid[k10] * w10 + grid[k01] * w01 + grid[k11] * w11;
+          const rv = gridRV[k00] * w00 + gridRV[k10] * w10 + gridRV[k01] * w01 + gridRV[k11] * w11;
           const idx = (v * M + u) * 4;
+          // 高度カラー4色＋尾根谷度の陰影（レーダー時はこの塗りは使わず等高線のみ）
           const c = altColor(h);
-          d[idx] = c[0]; d[idx + 1] = c[1]; d[idx + 2] = c[2]; d[idx + 3] = 255;
+          const shade = SHADE_LO + (SHADE_HI - SHADE_LO) * clamp(0.5 + rv * scale, 0, 1);
+          d[idx] = Math.min(255, c[0] * shade);
+          d[idx + 1] = Math.min(255, c[1] * shade);
+          d[idx + 2] = Math.min(255, c[2] * shade);
+          d[idx + 3] = 255;
         }
       }
       shadeCtx.putImageData(img, 0, 0);
