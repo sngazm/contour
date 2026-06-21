@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -241,7 +241,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v89'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v88'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -2107,9 +2107,7 @@ export function start(canvas) {
     const epr = project(ep.x, ep.y, ep.h);
     const base = project(ep.x, ep.y, e.gmin);
     const showEnd = !recording || recording.t >= recording.routeDur;
-    // 登頂クリア＆ロケット着陸後は、旗(到達点マーカー)を隠す（ロケットと重なって変になるため）
-    const clearedDone = e.summit && (recording ? recording.t >= recording.routeDur + recording.rktDur : e.t > ROCKET_START + ROCKET_DUR);
-    if (showEnd && !clearedDone) {
+    if (showEnd) {
       ctx.strokeStyle = 'rgba(224,81,46,0.45)';
       ctx.setLineDash([4, 5]);
       ctx.lineWidth = 1.5;
