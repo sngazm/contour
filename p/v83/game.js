@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -239,7 +239,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v84'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v83'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -1048,34 +1048,21 @@ export function start(canvas) {
     // 等高線を一度だけ抽出し、3Dセグメント(両端=同じ標高)として保存
     const CX = 120, RY = 120;
     const heights = new Float32Array(CX * RY);
-    const FIELD = CFG.FIELD_R, FIELD2 = FIELD * FIELD;
-    const toWXg = (c) => cx - half + (2 * half) * (c / (CX - 1));
-    const toWYg = (r) => cy - half + (2 * half) * (r / (RY - 1));
-    // pass1: 生の高さをサンプルし、フィールド円内(d<=FIELD)のサンプル最大を求める
-    let inMax = -Infinity;
-    for (let r = 0; r < RY; r++) {
-      const wy = toWYg(r);
-      for (let c = 0; c < CX; c++) {
-        const wx = toWXg(c);
-        const h = g.terrain.height(wx, wy);
-        heights[r * CX + c] = h;
-        if (wx * wx + wy * wy <= FIELD2 && h > inMax) inMax = h;
-      }
-    }
-    // pass2: 円の外は「場内サンプル最大 inMax」を超えないよう soft-ceiling で必ず inMax 未満に。
-    // これで最高点は必ず円内のセル。低地・中腹は素通り(=自然に連続)、頂上付近だけ滑らかに圧縮。
-    // softceil(h)=inMax - softplus(inMax-h)/β は常に < inMax（数式上の保証）。
-    const BETA = 60;
     let gmin = Infinity, gmax = -Infinity;
+    // 円形フィールドの外は地形を切り取らず自然に続けるが、頂上より高い峰が外に出ないよう
+    // 「頂上付近の高さだけ」をなだらかに圧縮する（低地・中腹はそのまま＝見た目は従来通り）。
+    const FIELD = CFG.FIELD_R, capH = g.field.max.h * 0.9;
     for (let r = 0; r < RY; r++) {
-      const wy = toWYg(r);
       for (let c = 0; c < CX; c++) {
-        const wx = toWXg(c), i = r * CX + c;
-        let h = heights[i];
-        if (wx * wx + wy * wy > FIELD2) {
-          h = inMax - Math.log1p(Math.exp(BETA * (inMax - h))) / BETA;
-          heights[i] = h;
+        const wx = cx - half + (2 * half) * (c / (CX - 1));
+        const wy = cy - half + (2 * half) * (r / (RY - 1));
+        let h = g.terrain.height(wx, wy);
+        const d = Math.hypot(wx, wy);
+        if (d > FIELD && h > capH) {
+          const t = clamp((d - FIELD) / 220, 0, 1);   // 境界では効かず、外ほど強く圧縮
+          h = capH + (h - capH) * (1 - 0.9 * t);       // 頂上(capHより上)だけを沈める
         }
+        heights[r * CX + c] = h;
         if (h < gmin) gmin = h;
         if (h > gmax) gmax = h;
       }
