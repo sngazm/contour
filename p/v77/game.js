@@ -1,12 +1,12 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
-  HP_WALK: 0.015,         // 平地を歩く消費(体力/秒・平地は少なめ)
+  HP_WALK: 0.020,         // 平地を歩く消費(体力/秒・平地は少なめ)
   HP_CLIMB_K: 380,        // 登りで増える消費の強さ
   HP_DESC_K: 240,         // 下りで増える消費の強さ(登りより軽め)
   FALL_LAND_K: 2.6,       // 着地ダメージ＝転落した高さ×これ
@@ -197,8 +197,8 @@ function setupGL(gl) {
     },
   };
 }
-const SHADE_LO = 1.0; // 尾根谷度の明暗は一旦なし（1=陰影なし。戻すなら 0.68/1.16 など）
-const SHADE_HI = 1.0;
+const SHADE_LO = 0.68; // 谷の暗さ
+const SHADE_HI = 1.16; // 尾根の明るさ
 
 // ラン番号 → 地形シード（全クライアントで決定的＝同じNラン目は同じ地形）
 function runSeed(n) {
@@ -241,7 +241,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v78'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v77'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
