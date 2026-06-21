@@ -1,22 +1,22 @@
 # Cloudflare Pages のキャッシュ制御
-# 独自ドメイン(ゾーン)経由でも常に最新が反映されるよう、毎回サーバへ再検証させる。
-# no-cache = キャッシュは保持してよいが、使う前に必ず origin に確認する（変更が無ければ 304 で軽い）。
-# これでビルドのたびに古い版が残り続けるのを防ぐ。
+# 独自ドメイン/ブラウザのどちらでも常に最新が反映されるよう、変化するファイルは保存させない。
+# no-store = ブラウザにもエッジにもキャッシュさせない（毎回必ず取得）。ハッシュ無しでその場で
+# 書き換わる構成なので、これでないと古い版が残り続ける。
 
-# HTML（トップ＝最新版ゲーム／各ページ）
+# HTML（トップ＝最新版ゲーム／各ページ）は絶対にキャッシュさせない
 /
-  Cache-Control: no-cache
+  Cache-Control: no-store
 /*.html
-  Cache-Control: no-cache
+  Cache-Control: no-store
 /versions/
-  Cache-Control: no-cache
+  Cache-Control: no-store
 
 # 一覧データ
 /versions.json
-  Cache-Control: no-cache
+  Cache-Control: no-store
 
 # 開発中の最新版エンジン（その場で書き換わる）
 /p/01-contour/*
-  Cache-Control: no-cache
+  Cache-Control: no-store
 /src/*
-  Cache-Control: no-cache
+  Cache-Control: no-store
