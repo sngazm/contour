@@ -1,8 +1,8 @@
 // プロトタイプ 01 — 等高線 / 円窓 / 斜面の重さ / 30秒後の俯瞰リプレイ
-import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from '../../src/util.js';
-import { makeTerrain, HEIGHT_SCALE } from '../../src/terrain.js';
-import { contourLevel, levelsFor } from '../../src/contours.js';
-import { createInput } from '../../src/input.js';
+import { clamp, lerp, easeInOut, easeOut, TAU, rgba, makeRng } from './util.js';
+import { makeTerrain, HEIGHT_SCALE } from './terrain.js';
+import { contourLevel, levelsFor } from './contours.js';
+import { createInput } from './input.js';
 
 const CFG = {
   // 体力制（時間制限の代わり）
@@ -239,7 +239,7 @@ function boxBlur(src, nx, ny, rb, tmp, dst) {
 
 // 高度を読みやすい整数に
 const altOf = (h) => Math.round(h * 1000);
-const VERSION = 'v81'; // タイトル脇に表示（凍結時に各版の番号が残る）
+const VERSION = 'v80'; // タイトル脇に表示（凍結時に各版の番号が残る）
 
 // 白ベースの配色
 const COL = {
@@ -1173,6 +1173,42 @@ export function start(canvas) {
   }
 
   // 左端の縦型・高度計（上端＝フィールド最高。4色スケール＋現在地/記録/目標）
+  function drawAltMeter(curH, best, maxH) {
+    const x = 16, w = 9;
+    const y0 = H * 0.72, y1 = H * 0.26; // 下=0, 上=最高(maxH)
+    const top = Math.max(maxH, 1e-3);
+    const at = (a) => y0 + (y1 - y0) * clamp(a / top, 0, 1);
+    const st = (a) => clamp(a / top, 0, 1); // 色スケールも maxH 基準
+    const grad = ctx.createLinearGradient(0, y0, 0, y1);
+    grad.addColorStop(0, rgba(ALT_C[0]));
+    for (let i = 0; i < ALT_TH.length; i++) {
+      grad.addColorStop(st(ALT_TH[i]), rgba(ALT_C[i]));     // 段彩のくっきりした境界
+      grad.addColorStop(st(ALT_TH[i]), rgba(ALT_C[i + 1]));
+    }
+    grad.addColorStop(1, rgba(ALT_C[ALT_C.length - 1]));
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y1, w, y0 - y1);
+    ctx.strokeStyle = 'rgba(40,39,35,0.35)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, y1, w, y0 - y1);
+    // 目標(▲) と 記録(★)。近接時は★を少し下げて重なりを避ける
+    const yMax = at(maxH);
+    let yBest = at(best);
+    if (Math.abs(yBest - yMax) < 12) yBest = yMax + 12;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.font = '600 11px ui-monospace, Menlo, monospace';
+    ctx.fillStyle = COL.peak;
+    ctx.fillText('▲', x + w + 3, yMax);
+    ctx.fillStyle = '#26251f';
+    ctx.fillText('★', x + w + 3, yBest);
+    // 現在地マーカー（右向き三角）
+    const yc = at(curH);
+    ctx.fillStyle = '#26251f';
+    ctx.beginPath();
+    ctx.moveTo(x - 3, yc); ctx.lineTo(x - 11, yc - 5); ctx.lineTo(x - 11, yc + 5);
+    ctx.closePath(); ctx.fill();
+  }
+
   function drawTriangle(x, y, s) {
     ctx.beginPath();
     ctx.moveTo(x, y - s);
@@ -1728,6 +1764,7 @@ export function start(canvas) {
 
     // タイトル(ready)では数値HUDを出さない（ロゴ等との重なりを避ける）
     if (g.state !== 'ready') drawHud(g.terrain.height(g.px, g.py), g.field.max.h, g.best, g.flash, 0, g.rec);
+    drawAltMeter(g.terrain.height(g.px, g.py), g.best, g.field.max.h);
 
     // 左下のレーダーボタン（所持時）。取得時はプレイヤーから飛んでくる演出。
     const rb = { x: 42, y: H - 60, r: 24 };
