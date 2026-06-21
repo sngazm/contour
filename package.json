@@ -7,5 +7,8 @@
   "scripts": {
     "dev": "npx --yes serve@14 -l 5173 .",
     "start": "npm run dev"
+  },
+  "devDependencies": {
+    "@napi-rs/canvas": "^1.0.0"
   }
 }
